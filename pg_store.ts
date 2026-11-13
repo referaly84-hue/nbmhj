@@ -4,7 +4,7 @@
    записываются ТОЛЬКО изменившиеся строки (дифф по хэшу), поэтому запись быстрая даже на большой базе.
 
    Подключение (любой вариант):
-     • переменная окружения DATABASE_URL="postgresql://user:pass@host:5432/dbname?sslmode=require"
+     • переменная окружения 
      • или впишите строку в PG_HARDCODED.url ниже
    Таблицы создаются автоматически при первом запуске.
 
@@ -23,10 +23,12 @@ import pg from 'pg';
 import crypto from 'crypto';
 
 /** ВСТАВЬТЕ СЮДА строку подключения (или задайте DATABASE_URL). Пусто = PostgreSQL выключен. */
-export const PG_HARDCODED: { url: string } = { url: 'postgresql://neondb_owner:npg_yU5dcF4VLoAI@ep-restless-dew-babvncvj-pooler.c-8.eu-central-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require' };
+export const PG_HARDCODED: { url: string } = {
+  url: 'postgresql://neondb_owner:npg_yU5dcF4VLoAI@ep-restless-dew-babvncvj-pooler.c-8.eu-central-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require',
+};
 
 export let pgActive = false;
-let pool: pg.Pool | null = null;
+let pool: pg.Pool | null = null
 
 const md5 = (s: string) => crypto.createHash('md5').update(s).digest('hex');
 /** jsonb не принимает символ \u0000 — вычищаем. */

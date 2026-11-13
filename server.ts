@@ -30,12 +30,12 @@ import path from "path";
 import { GoogleGenAI } from "@google/genai";
 function resolveGeminiModel(rawModel) {
   const m = String(rawModel || "").trim();
-  if (!m) return "gemini-4-hydrogen";
+  if (!m) return "gemini-3.5-flash";
   const lower = m.toLowerCase();
   if (lower === "3.5 flash" || lower === "gemini 3.5 flash" || lower === "gemini-3.5" || lower === "gemini-3.5-flash") {
-    return "gemini-4-hydrogen";
+    return "gemini-3.5-flash";
   }
-  if (/^gemini-(?:1\.|2\.0)|^gemini-pro$/i.test(m)) return "gemini-4-hydrogen";
+  if (/^gemini-(?:1\.|2\.0)|^gemini-pro$/i.test(m)) return "gemini-3.5-flash";
   return m;
 }
 function readServiceAccount() {
@@ -642,7 +642,7 @@ function buildTeamOfMonth(month, comp, fixtures, matchesMap, teamsMap) {
 // pg_store.ts
 import pg from "pg";
 import crypto from "crypto";
-var PG_HARDCODED = { url: "" };
+var PG_HARDCODED = { url: "postgresql://neondb_owner:npg_yU5dcF4VLoAI@ep-restless-dew-babvncvj-pooler.c-8.eu-central-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require" };
 var pgActive = false;
 var pool = null;
 var md5 = (s) => crypto.createHash("md5").update(s).digest("hex");
@@ -2260,27 +2260,34 @@ async function generateAIEskAnalysis(db2, caseId) {
 
 // server.ts
 var _origFetch = globalThis.fetch;
-var GEMINI_PROXY = (process.env.GEMINI_PROXY_URL || "").trim().replace(/\/+$/, "");
-var GEMINI_SECRET = (process.env.GEMINI_PROXY_SECRET || "").trim();
-if (GEMINI_PROXY) {
-  globalThis.fetch = (async (input, init) => {
-    let url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input?.url;
-    if (typeof url === "string" && url.includes("generativelanguage.googleapis.com")) {
-      const newUrl = url.replace("https://generativelanguage.googleapis.com", GEMINI_PROXY);
-      if (input instanceof Request) {
-        const req = new Request(newUrl, input);
-        if (GEMINI_SECRET) req.headers.set("x-proxy-secret", GEMINI_SECRET);
-        return _origFetch(req, init);
-      }
-      const newInit = { ...init || {} };
-      const h = new Headers(newInit.headers || {});
-      if (GEMINI_SECRET) h.set("x-proxy-secret", GEMINI_SECRET);
-      newInit.headers = h;
-      return _origFetch(newUrl, newInit);
-    }
-    return _origFetch(input, init);
-  });
+var PROXY_ROUTES = [
+  ["https://generativelanguage.googleapis.com", "/gemini"],
+  ["https://api.groq.com", "/groq"],
+  ["https://openrouter.ai", "/openrouter"],
+  ["https://api.telegram.org", "/telegram"]
+];
+function workerBase() {
+  try { return String(HARDCODED.workerUrl || "").trim().replace(/\/+$/, ""); } catch { return ""; }
 }
+globalThis.fetch = (async (input, init) => {
+  const base = workerBase();
+  if (!base) return _origFetch(input, init);
+  const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input?.url;
+  const route = typeof url === "string" ? PROXY_ROUTES.find(([h]) => url.startsWith(h)) : null;
+  if (!route) return _origFetch(input, init);
+  const newUrl = base + route[1] + url.slice(route[0].length);
+  const secret = String(HARDCODED.workerSecret || "").trim();
+  if (typeof Request !== "undefined" && input instanceof Request) {
+    const req = new Request(newUrl, input);
+    if (secret) req.headers.set("x-proxy-secret", secret);
+    return _origFetch(req, init);
+  }
+  const newInit = { ...(init || {}) };
+  const h = new Headers(newInit.headers || {});
+  if (secret) h.set("x-proxy-secret", secret);
+  newInit.headers = h;
+  return _origFetch(newUrl, newInit);
+});
 function normalizeTgChat(raw) {
   let s = String(raw || "").trim();
   if (!s) return "";
@@ -2291,10 +2298,15 @@ function normalizeTgChat(raw) {
 }
 const SECRETS_FILE = path3.resolve("secrets.json");
 var lastSecretsMtimeMs = 0;
+var _secCache = { mtime: -1, data: {} };
 function readSecretsFile() {
   try {
     if (fs3.existsSync(SECRETS_FILE)) {
-      return JSON.parse(fs3.readFileSync(SECRETS_FILE, "utf8"));
+      const st = fs3.statSync(SECRETS_FILE);
+      if (st.mtimeMs !== _secCache.mtime) {
+        _secCache = { mtime: st.mtimeMs, data: JSON.parse(fs3.readFileSync(SECRETS_FILE, "utf8")) };
+      }
+      return _secCache.data;
     }
   } catch (e) {
     console.warn("[Secrets] Ошибка чтения secrets.json:", e.message);
@@ -2308,12 +2320,25 @@ function saveSecretsFile(updates) {
     fs3.writeFileSync(SECRETS_FILE, JSON.stringify(merged, null, 2), "utf8");
     try {
       lastSecretsMtimeMs = fs3.statSync(SECRETS_FILE).mtimeMs;
+      _secCache = { mtime: lastSecretsMtimeMs, data: merged };
     } catch {}
     return true;
   } catch (e) {
     console.error("[Secrets] Ошибка записи в secrets.json:", e.message);
     return false;
   }
+}
+function secList(...vals) {
+  const out = [], seen = new Set();
+  for (const v of vals) {
+    const arr = Array.isArray(v) ? v : typeof v === "string" ? v.split(/[\n,;\s|]+/) : [];
+    for (const x of arr) {
+      const c = String(x || "").trim();
+      if (!c || c.includes("\u2022") || /^(MY_|YOUR_)/i.test(c) || seen.has(c)) continue;
+      seen.add(c); out.push(c);
+    }
+  }
+  return out;
 }
 function syncSecretsFromDisk(force = false) {
   try {
@@ -2328,56 +2353,10 @@ function syncSecretsFromDisk(force = false) {
     let changed = false;
     if (!db.settings.keys) db.settings.keys = {};
     if (!db.settings.models) db.settings.models = {};
-    if ("geminiKeys" in sec || "geminiKey" in sec) {
-      const list = [];
-      if (Array.isArray(sec.geminiKeys)) list.push(...sec.geminiKeys);
-      else if (typeof sec.geminiKeys === "string") list.push(...sec.geminiKeys.split(/[\n,;\s|]+/));
-      if (typeof sec.geminiKey === "string") list.push(...sec.geminiKey.split(/[\n,;\s|]+/));
-      const cleanList = list.map((x) => String(x || "").trim()).filter((x) => x && !x.includes("\u2022"));
-      const nextVal = cleanList.join("\n");
-      if (nextVal) {
-        if (db.settings.keys.gemini !== nextVal) {
-          db.settings.keys.gemini = nextVal;
-          changed = true;
-        }
-      } else if (db.settings.keys.gemini) {
-        delete db.settings.keys.gemini;
-        changed = true;
-      }
-    }
-    if (typeof sec.groqKey === "string") {
-      const v = sec.groqKey.trim();
-      if (v && db.settings.keys.groq !== v) { db.settings.keys.groq = v; changed = true; }
-      else if (!v && db.settings.keys.groq) { delete db.settings.keys.groq; changed = true; }
-    }
-    if (typeof sec.openrouterKey === "string") {
-      const v = sec.openrouterKey.trim();
-      if (v && db.settings.keys.openrouter !== v) { db.settings.keys.openrouter = v; changed = true; }
-      else if (!v && db.settings.keys.openrouter) { delete db.settings.keys.openrouter; changed = true; }
-    }
-    if (typeof sec.geminiModel === "string") {
-      const gm = sec.geminiModel.trim() ? resolveGeminiModel(sec.geminiModel.trim()) : "";
-      if (gm && db.settings.models.gemini !== gm) { db.settings.models.gemini = gm; changed = true; }
-      else if (!gm && db.settings.models.gemini) { delete db.settings.models.gemini; changed = true; }
-    }
-    if (typeof sec.groqModel === "string") {
-      const qm = sec.groqModel.trim();
-      if (qm && db.settings.models.groq !== qm) { db.settings.models.groq = qm; changed = true; }
-      else if (!qm && db.settings.models.groq) { delete db.settings.models.groq; changed = true; }
-    }
-    if (typeof sec.openrouterModel === "string") {
-      const om = sec.openrouterModel.trim();
-      if (om && db.settings.models.openrouter !== om) { db.settings.models.openrouter = om; changed = true; }
-      else if (!om && db.settings.models.openrouter) { delete db.settings.models.openrouter; changed = true; }
-    }
-    if (typeof sec.tgToken === "string" && !sec.tgToken.includes("\u2022")) {
-      const tt = sec.tgToken.trim();
-      if (db.settings.tgToken !== tt) { db.settings.tgToken = tt; changed = true; }
-    }
-    if (typeof sec.tgChat === "string") {
-      const tc = normalizeTgChat(sec.tgChat);
-      if (db.settings.tgChat !== tc) { db.settings.tgChat = tc; changed = true; }
-    }
+    if (db.settings.keys && Object.keys(db.settings.keys).length) { delete db.settings.keys; changed = true; }
+    if (db.settings.models && Object.keys(db.settings.models).length) { delete db.settings.models; changed = true; }
+    if (db.settings.tgToken) { delete db.settings.tgToken; changed = true; }
+    if (db.settings.tgChat) { delete db.settings.tgChat; changed = true; }
     if (typeof sec.adminCode === "string" && sec.adminCode.trim() && !process.env.ADMIN_CODE) {
       const ac = sec.adminCode.trim();
       if (db.settings.adminCode !== ac) {
@@ -2397,48 +2376,23 @@ function syncSecretsFromDisk(force = false) {
   }
 }
 var HARDCODED = {
-  get geminiKeys() {
-    const s = readSecretsFile();
-    if (Array.isArray(s.geminiKeys) && s.geminiKeys.length) return s.geminiKeys;
-    if (typeof s.geminiKeys === "string" && s.geminiKeys.trim()) return s.geminiKeys.split(/[\n,;\s|]+/).filter(Boolean);
-    return [];
-  },
-  get geminiModel() {
-    const s = readSecretsFile();
-    return resolveGeminiModel(s.geminiModel || "gemini-4-hydrogen");
-  },
-  get groqKey() {
-    const s = readSecretsFile();
-    return s.groqKey || "";
-  },
-  get groqModel() {
-    const s = readSecretsFile();
-    return s.groqModel || "openai/gpt-oss-120b";
-  },
-  get openrouterKey() {
-    const s = readSecretsFile();
-    return s.openrouterKey || "";
-  },
-  get openrouterModel() {
-    const s = readSecretsFile();
-    return s.openrouterModel || "openrouter/free";
-  },
-  get tgToken() {
-    const s = readSecretsFile();
-    return s.tgToken !== undefined ? s.tgToken : "9287223246:AAGbnn9P7bNs7tpU498FxswCFZ-0QcUu3BQ";
-  },
-  get tgChat() {
-    const s = readSecretsFile();
-    return s.tgChat !== undefined ? s.tgChat : "https://t.me/matchsmotr";
-  },
-  get adminCode() {
-    const s = readSecretsFile();
-    return s.adminCode || "";
-  }
+  get geminiKeys() { const s = readSecretsFile(); return secList(s.geminiKeys, s.geminiKey); },
+  get groqKeys() { const s = readSecretsFile(); return secList(s.groqKeys, s.groqKey); },
+  get openrouterKeys() { const s = readSecretsFile(); return secList(s.openrouterKeys, s.openrouterKey); },
+  get groqKey() { return this.groqKeys[0] || ""; },
+  get openrouterKey() { return this.openrouterKeys[0] || ""; },
+  get geminiModel() { return resolveGeminiModel(readSecretsFile().geminiModel || process.env.GEMINI_MODEL || "gemini-3.5-flash"); },
+  get groqModel() { return String(readSecretsFile().groqModel || process.env.GROQ_MODEL || "openai/gpt-oss-120b").trim(); },
+  get openrouterModel() { return String(readSecretsFile().openrouterModel || process.env.OPENROUTER_MODEL || "openrouter/free").trim(); },
+  get tgToken() { const t = String(readSecretsFile().tgToken || "").trim(); return t.includes("\u2022") ? "" : t; },
+  get tgChat() { return String(readSecretsFile().tgChat || "").trim(); },
+  get adminCode() { return readSecretsFile().adminCode || ""; },
+  get workerUrl() { return String(readSecretsFile().workerUrl || process.env.GEMINI_PROXY_URL || "").trim(); },
+  get workerSecret() { return String(readSecretsFile().workerSecret || process.env.GEMINI_PROXY_SECRET || "").trim(); }
 };
 var HARDCODED_LEGACY = {
   geminiKeys: [],
-  geminiModel: "gemini-4-hydrogen",
+  geminiModel: "gemini-3.5-flash",
   groqKey: "",
   openrouterKey: "",
   tgToken: "",
@@ -2446,11 +2400,11 @@ var HARDCODED_LEGACY = {
 };
 var tgToken = () => {
   syncSecretsFromDisk();
-  return String(process.env.TELEGRAM_BOT_TOKEN || process.env.TG_TOKEN || db?.settings?.tgToken || HARDCODED.tgToken || "").trim();
+  return String(HARDCODED.tgToken || process.env.TELEGRAM_BOT_TOKEN || process.env.TG_TOKEN || "").trim();
 };
 var tgChat = () => {
   syncSecretsFromDisk();
-  return normalizeTgChat(process.env.TELEGRAM_CHAT_ID || process.env.TG_CHAT || db?.settings?.tgChat || HARDCODED.tgChat || "");
+  return normalizeTgChat(HARDCODED.tgChat || process.env.TELEGRAM_CHAT_ID || process.env.TG_CHAT || "");
 };
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path3.dirname(__filename);
@@ -4705,9 +4659,6 @@ function getGeminiKeys() {
   else if (typeof sec.geminiKeys === "string") raw.push(...sec.geminiKeys.split(/[\n,;\s|]+/));
   if (typeof sec.geminiKey === "string") raw.push(...sec.geminiKey.split(/[\n,;\s|]+/));
 
-  const dbG = db.settings?.keys?.gemini;
-  if (typeof dbG === "string") raw.push(...dbG.split(/[\n,;\s|]+/));
-  else if (Array.isArray(dbG)) raw.push(...dbG);
   raw.push(...HARDCODED.geminiKeys);
   raw.push(...getEnvGeminiKeys());
   const seen = /* @__PURE__ */ new Set();
@@ -4726,16 +4677,20 @@ var aiCtx = new AsyncLocalStorage();
 var aiAllowed = () => !!aiCtx.getStore()?.ai;
 function provList() {
   syncSecretsFromDisk();
-  const k = db.settings.keys || {}, m = db.settings.models || {}, L = [];
+  const L = [];
   const gKeys = getGeminiKeys();
-  const q2 = process.env.GROQ_API_KEY || k.groq || HARDCODED.groqKey;
-  const o = process.env.OPENROUTER_API_KEY || k.openrouter || HARDCODED.openrouterKey;
-  const gModel = resolveGeminiModel(process.env.GEMINI_MODEL || m.gemini || HARDCODED.geminiModel || "gemini-4-hydrogen");
+  const qKeys = secList(HARDCODED.groqKeys, process.env.GROQ_API_KEY);
+  const oKeys = secList(HARDCODED.openrouterKeys, process.env.OPENROUTER_API_KEY);
+  const gModel = HARDCODED.geminiModel;
   for (let i = 0; i < gKeys.length; i++) {
     L.push({ n: "gemini", id: `gemini_proj_${i + 1}`, key: gKeys[i], model: gModel, max: 32e3 });
   }
-  if (q2) L.push({ n: "groq", id: "groq", key: q2, base: "https://api.groq.com/openai/v1", model: process.env.GROQ_MODEL || m.groq || HARDCODED.groqModel || "openai/gpt-oss-120b", max: 8e3 });
-  if (o) L.push({ n: "openrouter", id: "openrouter", key: o, base: "https://openrouter.ai/api/v1", model: process.env.OPENROUTER_MODEL || m.openrouter || HARDCODED.openrouterModel || "openrouter/free", max: 8e3 });
+  for (let i = 0; i < qKeys.length; i++) {
+    L.push({ n: "groq", id: `groq_${i + 1}`, key: qKeys[i], base: "https://api.groq.com/openai/v1", model: HARDCODED.groqModel, max: 8e3 });
+  }
+  for (let i = 0; i < oKeys.length; i++) {
+    L.push({ n: "openrouter", id: `openrouter_${i + 1}`, key: oKeys[i], base: "https://openrouter.ai/api/v1", model: HARDCODED.openrouterModel, max: 8e3 });
+  }
   return L;
 }
 var hasLLM = () => provList().length > 0 && aiAllowed();
@@ -4757,8 +4712,10 @@ async function callProv(p, sys, user, o) {
         apiKey: p.key,
         httpOptions: {
           headers: {
-            "User-Agent": "aistudio-build"
-          }
+            "User-Agent": "aistudio-build",
+            ...(workerBase() && HARDCODED.workerSecret ? { "x-proxy-secret": HARDCODED.workerSecret } : {})
+          },
+          ...(workerBase() ? { baseUrl: workerBase() + "/gemini" } : {})
         }
       });
       const config: any = {
@@ -4845,7 +4802,7 @@ var coolModel = (p, model, e) => {
   const ms = e.daily ? 15 * 6e4 : e.status === 429 ? 9e4 : e.status >= 500 || e.name === "AbortError" ? 3e4 : 6e4;
   modelCooldown.set(`${p.key}|${model}`, Date.now() + ms);
 };
-var GEMINI_FALLBACK_MODELS = ["gemini-4-hydrogen", "gemini-3.1-flash-lite"];
+var GEMINI_FALLBACK_MODELS = ["gemini-3.5-flash", "gemini-3.1-flash-lite"];
 async function llm(sys, user, { json = true, task = "", temp = 0.9, max = 16e3, grounded = false } = {}) {
   const cx = aiCtx.getStore();
   if (!cx?.ai) throw Object.assign(new Error("\u0418\u0418 \u0434\u043E\u0441\u0442\u0443\u043F\u0435\u043D \u0442\u043E\u043B\u044C\u043A\u043E \u0430\u0434\u043C\u0438\u043D\u0438\u0441\u0442\u0440\u0430\u0442\u043E\u0440\u0443"), { noLLM: true });
@@ -9948,7 +9905,7 @@ app.get("/api/admin/secrets", admin, (req, res) => {
   const sec = readSecretsFile();
   const activeGemini = getGeminiKeys();
   const envGemini = getEnvGeminiKeys();
-  const effectiveModel = resolveGeminiModel(process.env.GEMINI_MODEL || db.settings?.models?.gemini || sec.geminiModel || HARDCODED.geminiModel);
+  const effectiveModel = HARDCODED.geminiModel;
   res.json({
     ok: 1,
     file: "secrets.json",
@@ -9957,11 +9914,11 @@ app.get("/api/admin/secrets", admin, (req, res) => {
     geminiFileCount: Array.isArray(sec.geminiKeys) ? sec.geminiKeys.length : (typeof sec.geminiKeys === "string" && sec.geminiKeys.trim() ? sec.geminiKeys.split(/[\n,;\s|]+/).filter(Boolean).length : 0),
     geminiEnvCount: envGemini.length,
     geminiModel: effectiveModel,
-    hasGroq: !!(process.env.GROQ_API_KEY || db.settings.keys?.groq || sec.groqKey),
-    groqModel: process.env.GROQ_MODEL || db.settings?.models?.groq || sec.groqModel || "openai/gpt-oss-120b",
-    hasOpenrouter: !!(process.env.OPENROUTER_API_KEY || db.settings.keys?.openrouter || sec.openrouterKey),
-    openrouterModel: process.env.OPENROUTER_MODEL || db.settings?.models?.openrouter || sec.openrouterModel || "openrouter/free",
-    hasTgToken: !!(process.env.TELEGRAM_BOT_TOKEN || process.env.TG_TOKEN || db.settings?.tgToken || sec.tgToken),
+    hasGroq: HARDCODED.groqKeys.length > 0 || !!process.env.GROQ_API_KEY,
+    groqModel: HARDCODED.groqModel,
+    hasOpenrouter: HARDCODED.openrouterKeys.length > 0 || !!process.env.OPENROUTER_API_KEY,
+    openrouterModel: HARDCODED.openrouterModel,
+    hasTgToken: !!tgToken(),
     tgChat: tgChat(),
     hasAdminCode: !!(process.env.ADMIN_CODE || sec.adminCode || db.settings?.adminCode)
   });
@@ -11793,9 +11750,9 @@ app.get("/api/admin/overview", admin, (req, res) => {
   const envGemini = getEnvGeminiKeys();
   const fileGeminiCount = Array.isArray(sec.geminiKeys) ? sec.geminiKeys.length : (typeof sec.geminiKeys === "string" && sec.geminiKeys.trim() ? sec.geminiKeys.split(/[\n,;\s|]+/).filter(Boolean).length : 0);
   const effModels = {
-    gemini: resolveGeminiModel(process.env.GEMINI_MODEL || db.settings.models?.gemini || HARDCODED.geminiModel || "gemini-4-hydrogen"),
-    groq: process.env.GROQ_MODEL || db.settings.models?.groq || HARDCODED.groqModel || "openai/gpt-oss-120b",
-    openrouter: process.env.OPENROUTER_MODEL || db.settings.models?.openrouter || HARDCODED.openrouterModel || "openrouter/free"
+    gemini: HARDCODED.geminiModel,
+    groq: HARDCODED.groqModel,
+    openrouter: HARDCODED.openrouterModel
   };
   res.json({
     teams: db.teams.map((t) => ({
@@ -11820,8 +11777,8 @@ app.get("/api/admin/overview", admin, (req, res) => {
       geminiEnvCount: envGemini.length,
       geminiTails: activeGemini.map((k) => "\u2026" + k.slice(-4)),
       geminiCooling: activeGemini.filter((k) => (keyCooldown.get(k) || 0) > Date.now()).length,
-      groq: !!(process.env.GROQ_API_KEY || db.settings.keys.groq || HARDCODED.groqKey),
-      openrouter: !!(process.env.OPENROUTER_API_KEY || db.settings.keys.openrouter || HARDCODED.openrouterKey)
+      groq: HARDCODED.groqKeys.length > 0 || !!process.env.GROQ_API_KEY,
+      openrouter: HARDCODED.openrouterKeys.length > 0 || !!process.env.OPENROUTER_API_KEY
     },
     models: effModels,
     log: db.llmlog.slice(-25).reverse(),
@@ -11858,14 +11815,12 @@ app.post("/api/admin/settings", admin, (req, res) => {
   const secUpdates: Record<string, any> = {};
   for (const k of ["season", "siteUrl"]) if (typeof b[k] === "string") s[k] = b[k].trim();
   if (typeof b.tgChat === "string") {
-    s.tgChat = normalizeTgChat(b.tgChat);
-    secUpdates.tgChat = s.tgChat;
+    secUpdates.tgChat = normalizeTgChat(b.tgChat);
     tgCooldownUntil = 0;
     tgLastStatus = { ok: true };
   }
   if (typeof b.tgToken === "string" && !b.tgToken.includes("\u2022")) {
-    s.tgToken = b.tgToken.trim();
-    secUpdates.tgToken = s.tgToken;
+    secUpdates.tgToken = b.tgToken.trim();
     tgCooldownUntil = 0;
     tgLastStatus = { ok: true };
   }
@@ -11882,40 +11837,19 @@ app.post("/api/admin/settings", admin, (req, res) => {
   if (b.techDefeat !== void 0) s.techDefeat = !!b.techDefeat;
   if (b.grounding !== void 0) s.grounding = !!b.grounding;
   if (typeof b.systemPrompt === "string") s.systemPrompt = b.systemPrompt.trim() === SYS_DEFAULT.trim() ? "" : b.systemPrompt;
+  const KEYF = { gemini: ["geminiKeys", "geminiKey"], groq: ["groqKeys", "groqKey"], openrouter: ["openrouterKeys", "openrouterKey"] };
+  const MODF = { gemini: "geminiModel", groq: "groqModel", openrouter: "openrouterModel" };
   for (const k of ["gemini", "groq", "openrouter"]) {
-    if (typeof b.keys?.[k] === "string") {
-      const val = b.keys[k].trim();
-      if (val && !val.includes("\u2022")) {
-        s.keys[k] = val;
-        if (k === "gemini") secUpdates.geminiKeys = val.split(/[\n,;\s|]+/).map((x) => x.trim()).filter(Boolean);
-        else if (k === "groq") secUpdates.groqKey = val;
-        else if (k === "openrouter") secUpdates.openrouterKey = val;
-      } else if (val === "") {
-        delete s.keys[k];
-        if (k === "gemini") secUpdates.geminiKeys = [];
-        else if (k === "groq") secUpdates.groqKey = "";
-        else if (k === "openrouter") secUpdates.openrouterKey = "";
-      }
-    } else if (Array.isArray(b.keys?.[k]) && k === "gemini") {
-      const cleanKeys = b.keys[k].map((x) => String(x || "").trim()).filter((x) => x && !x.includes("\u2022"));
-      if (cleanKeys.length) s.keys.gemini = cleanKeys.join("\n");
-      else delete s.keys.gemini;
-      secUpdates.geminiKeys = cleanKeys;
+    const raw = b.keys?.[k];
+    const list = typeof raw === "string" ? raw.split(/[\n,;\s|]+/) : Array.isArray(raw) ? raw : null;
+    if (list) {
+      const clean = list.map((x) => String(x || "").trim()).filter((x) => x && !x.includes("\u2022"));
+      if (clean.length) { secUpdates[KEYF[k][0]] = clean; secUpdates[KEYF[k][1]] = ""; }
+      else if (typeof raw === "string" && raw.trim() === "") { secUpdates[KEYF[k][0]] = []; secUpdates[KEYF[k][1]] = ""; }
     }
     if (typeof b.models?.[k] === "string") {
       const mv = b.models[k].trim();
-      if (mv) {
-        const resolved = k === "gemini" ? resolveGeminiModel(mv) : mv;
-        s.models[k] = resolved;
-        if (k === "gemini") secUpdates.geminiModel = resolved;
-        else if (k === "groq") secUpdates.groqModel = resolved;
-        else if (k === "openrouter") secUpdates.openrouterModel = resolved;
-      } else {
-        delete s.models[k];
-        if (k === "gemini") secUpdates.geminiModel = "gemini-3.5-flash";
-        else if (k === "groq") secUpdates.groqModel = "";
-        else if (k === "openrouter") secUpdates.openrouterModel = "";
-      }
+      secUpdates[MODF[k]] = mv ? (k === "gemini" ? resolveGeminiModel(mv) : mv) : (k === "gemini" ? "gemini-3.5-flash" : "");
     }
   }
   keyCooldown.clear();
@@ -11929,7 +11863,7 @@ app.post("/api/admin/settings", admin, (req, res) => {
     ok: 1,
     secretsFile: "secrets.json",
     geminiCount: getGeminiKeys().length,
-    geminiModel: resolveGeminiModel(process.env.GEMINI_MODEL || s.models.gemini || HARDCODED.geminiModel || "gemini-3.5-flash")
+    geminiModel: HARDCODED.geminiModel
   });
 });
 app.post("/api/admin/telegram/test", admin, async (req, res) => {
