@@ -517,358 +517,6 @@ function getTeamCoach(name, comp) {
     salary: 5e6
   };
 }
-function detectTacticalIntent(text: any) {
-  const s = String(text || "").toLowerCase();
-  let att = 0, def = 0, press = 0, cnt = 0, poss = 0;
-  if (/атак|штурм|все вперед|давить|взламыва|остро|голы|смело|навал|агресси/i.test(s)) att += 3;
-  if (/оборон|автобус|глухая|сзади|не пропустить|засушить|откат|вторым номером|бетон|блок|терпеть|отбива/i.test(s)) def += 3;
-  if (/прессинг|контрпрессинг|отбор|не давать дышать|душить|на чужой|высокая линия/i.test(s)) press += 3;
-  if (/контратак|быстрый выход|на скорости|заброс|вертикаль|ловить на ошиб|длинный пас/i.test(s)) cnt += 3;
-  if (/контрол|пас|владени|комбинац|в одно касани|стеночк|позиционн|разыгрыва|через пас/i.test(s)) poss += 3;
-  let primary = "balanced";
-  const maxVal = Math.max(att, def, press, cnt, poss);
-  if (maxVal >= 2) {
-    if (def === maxVal) primary = "defensive";
-    else if (att === maxVal) primary = "attacking";
-    else if (press === maxVal) primary = "pressing";
-    else if (cnt === maxVal) primary = "counter";
-    else if (poss === maxVal) primary = "possession";
-  }
-  return { primary, att, def, press, cnt, poss };
-}
-
-function detectCoachArchetype(coach: any) {
-  const st = ((coach?.styleTitle || coach?.style || "") + " " + (coach?.tactic || "") + " " + (coach?.quote || "")).toLowerCase();
-  if (/атак|тотальн/i.test(st)) return "attacking";
-  if (/прессинг|агрессив|смело/i.test(st)) return "pressing";
-  if (/оборон|контратак|плотн|надежн/i.test(st)) return "counter_defensive";
-  if (/комбинац|контрол|пас|доминир/i.test(st)) return "possession";
-  return "balanced";
-}
-
-function computeCoachSynergy(coach: any, tactics: any, staffList?: any[]) {
-  if (!coach) {
-    return {
-      score: 70,
-      statusTitle: "Базовая синергия",
-      description: "Главный тренер не назначен — команда играет по стандартной схеме.",
-      styleFit: "neutral",
-      styleFitLabel: "Стандартная схема",
-      formationFit: true,
-      formationFitLabel: "Нейтральная расстановка",
-      coachRating: 65,
-      staffRating: 70,
-      trainingQuality: "Стандартная подготовка",
-      staffBonus: 0,
-      xgMultiplier: 1.0,
-      errorMultiplier: 1.0,
-      inGameEffect: "Стандартная игра без бонусов и штрафов.",
-      valueOf() { return this.score; },
-      toString() { return String(this.score); }
-    };
-  }
-
-  const coachArch = detectCoachArchetype(coach);
-  const userIntent = detectTacticalIntent(tactics?.speech || "");
-  const formation = tactics?.formation || coach.formation || "4-3-3";
-  const favoriteFm = coach.favoriteFormation || coach.formation || "4-3-3";
-
-  let score = 70;
-  let styleFit = "neutral";
-  let styleFitLabel = "Нейтральное соответствие";
-  const descParts: string[] = [];
-  let inGameEffect = "";
-
-  // 1. Сравнение стиля тренера и установки пользователя
-  if (userIntent.primary === "defensive") {
-    if (coachArch === "counter_defensive" || coachArch === "balanced") {
-      score += 16;
-      styleFit = "perfect";
-      styleFitLabel = "Идеальное совпадение стиля";
-      descParts.push(`Установка на строгую оборону и надежность совпадает с защитной философией тренера (${coach.name}).`);
-      inGameEffect = "+15% к надежности при позиционной обороне, редкие обрезы.";
-    } else if (coachArch === "attacking" || coachArch === "possession") {
-      score -= 28;
-      styleFit = "clash";
-      styleFitLabel = "Конфликт стилей (автобус vs атака)";
-      descParts.push(`Внимание: ${coach.name} ставит атакующий комбинационный футбол, а игрокам навязан глухой автобус. Игроки растеряны, прижимаются к воротам и допускают грубые ошибки под давлением.`);
-      inGameEffect = "Падение xG на 22%, нервозность защитников при затяжных атаках соперника.";
-    } else {
-      score -= 10;
-      styleFit = "clash";
-      styleFitLabel = "Сдержанное несоответствие";
-      descParts.push(`Оборонительный крен установки сдерживает атакующий потенциал тренера.`);
-      inGameEffect = "Меньше остроты впереди, надежность сзади.";
-    }
-  } else if (userIntent.primary === "attacking" || userIntent.primary === "pressing") {
-    if (coachArch === "attacking" || coachArch === "pressing" || coachArch === "possession") {
-      score += 18;
-      styleFit = "perfect";
-      styleFitLabel = "Блестящая синергия атаки";
-      descParts.push(`Атакующая и прессингующая установка резонирует с философией тренера (${coach.name}). Команда смело забирает мяч и остро атакует.`);
-      inGameEffect = "+18% к реализации моментов и скорости перехода из обороны.";
-    } else if (coachArch === "counter_defensive") {
-      score -= 26;
-      styleFit = "clash";
-      styleFitLabel = "Конфликт: безрассудная атака vs строгая оборона";
-      descParts.push(`Тренер (${coach.name}) строит игру от строгой дисциплины сзади, а установка бросает всех вперед. Команда оголяет тылы и уязвима к контратакам.`);
-      inGameEffect = "Разрывы между защитой и полузащитой, высокий риск пропустить на контратаке.";
-    } else {
-      score += 6;
-      styleFit = "good";
-      styleFitLabel = "Хорошее понимание";
-      descParts.push(`Активная установка стимулирует команду.`);
-      inGameEffect = "+8% к темпу атак.";
-    }
-  } else if (userIntent.primary === "possession") {
-    if (coachArch === "possession" || coachArch === "attacking") {
-      score += 16;
-      styleFit = "perfect";
-      styleFitLabel = "Отличное владение мячом";
-      descParts.push(`Короткий пас и контроль мяча в установке гармонируют с концепцией тренера (${coach.name}).`);
-      inGameEffect = "+15% к контролю мяча и культуре паса.";
-    } else if (coachArch === "counter_defensive") {
-      score -= 12;
-      styleFit = "clash";
-      styleFitLabel = "Замедление темпа";
-      descParts.push(`Долгий розыгрыш не вписывается в вертикальную контратакующую манеру тренера.`);
-      inGameEffect = "Затяжные атаки без завершающего удара.";
-    } else {
-      score += 8;
-      styleFit = "good";
-      styleFitLabel = "Уверенный контроль";
-      descParts.push(`Контроль мяча обеспечивает стабильность в центре поля.`);
-      inGameEffect = "+10% к точности передач.";
-    }
-  } else if (userIntent.primary === "counter") {
-    if (coachArch === "counter_defensive" || coachArch === "pressing") {
-      score += 16;
-      styleFit = "perfect";
-      styleFitLabel = "Острые контратаки";
-      descParts.push(`Вертикальный выход в контратаки — любимое оружие ${coach.name}.`);
-      inGameEffect = "+20% к остроте быстрых прорывов.";
-    } else {
-      score += 5;
-      styleFit = "good";
-      styleFitLabel = "Прагматичный план";
-      descParts.push(`Контратакующий план на игру понятен игрокам.`);
-      inGameEffect = "+7% к точности выносов на форварда.";
-    }
-  } else {
-    // Нейтральная установка / тренерский план по умолчанию
-    score += 5;
-    styleFit = "good";
-    styleFitLabel = "Баланс по плану тренера";
-    descParts.push(`Команда действует по штатному тактическому плану тренера (${coach.name}).`);
-    inGameEffect = "Сбалансированное выполнение тренерских инструкций.";
-  }
-
-  // 2. Сравнение схемы
-  let formationFit = false;
-  let formationFitLabel = "Непривычная схема";
-  if (formation === favoriteFm) {
-    score += 12;
-    formationFit = true;
-    formationFitLabel = `Любимая схема тренера (${favoriteFm})`;
-    descParts.push(`Схема ${formation} наиграна до автоматизма.`);
-  } else if (favoriteFm && Math.abs(Number(formation[0]) - Number(favoriteFm[0])) <= 1) {
-    score += 4;
-    formationFit = true;
-    formationFitLabel = `Рабочая схема (${formation})`;
-    descParts.push(`Схема ${formation} хорошо адаптирована тренером.`);
-  } else {
-    score -= 10;
-    formationFit = false;
-    formationFitLabel = `Непривычная схема (${formation} вместо любимой ${favoriteFm})`;
-    descParts.push(`Переход на ${formation} требует перестройки привычных связок.`);
-  }
-
-  // 3. Влияние уровня тренера и тренерского штаба
-  const coachRep = Number(coach.reputation) || 75;
-  const cRepBonus = Math.round((coachRep - 70) * 0.4);
-  score += cRepBonus;
-
-  // Штаб
-  let staffListArr = Array.isArray(staffList) ? staffList : [];
-  let staffAvg = 70;
-  let staffBonus = 0;
-  let trainingQuality = "Стандартная тренировочная база";
-
-  if (staffListArr.length > 0) {
-    const sum = staffListArr.reduce((acc, s) => acc + (Number(s.rating) || 70), 0);
-    staffAvg = Math.round(sum / staffListArr.length);
-    staffBonus = Math.round((staffAvg - 70) * 0.4);
-    score += staffBonus;
-
-    const hasFitness = staffListArr.some(s => s.role === "fitness" && (s.rating || 70) >= 75);
-    const hasGk = staffListArr.some(s => s.role === "gk" && (s.rating || 70) >= 75);
-    const hasAsst = staffListArr.some(s => s.role === "assistant" && (s.rating || 70) >= 75);
-
-    if (staffAvg >= 80) {
-      trainingQuality = "Высококлассный штаб: тренировочный микроцикл усваивается на 95%";
-      descParts.push("Тренерский штаб топ-уровня: отличная физподготовка к концовке и разбор стандартов.");
-    } else if (staffAvg >= 72) {
-      trainingQuality = "Квалифицированный штаб: стабильная подготовка к матчу";
-    } else {
-      trainingQuality = "Штаб требует усиления: возможны просадки в концовках";
-      descParts.push("Уровень штаба скромный: не хватает выносливости после 75-й минуты.");
-    }
-
-    if (!hasFitness) score -= 4;
-    if (!hasGk) score -= 3;
-    if (!hasAsst) score -= 3;
-  }
-
-  score = Math.min(99, Math.max(25, score));
-
-  let statusTitle = "Оптимальная синергия";
-  if (score >= 90) statusTitle = "Идеальная гармония";
-  else if (score >= 80) statusTitle = "Высокое взаимопонимание";
-  else if (score >= 65) statusTitle = "Рабочий баланс";
-  else if (score >= 50) statusTitle = "Тактическое разногласие";
-  else statusTitle = "Острый конфликт стилей";
-
-  return {
-    score,
-    statusTitle,
-    description: descParts.join(" "),
-    styleFit,
-    styleFitLabel,
-    formationFit,
-    formationFitLabel,
-    coachName: coach.name || "Главный тренер",
-    coachRating: coachRep,
-    staffRating: staffAvg,
-    staffBonus,
-    trainingQuality,
-    xgMultiplier: +(0.75 + (score / 100) * 0.45).toFixed(2),
-    errorMultiplier: +(1.45 - (score / 100) * 0.6).toFixed(2),
-    inGameEffect,
-    valueOf() { return this.score; },
-    toString() { return String(this.score); }
-  };
-}
-
-function computeTeamChemistry(teamId: any, tactics: any, matchDate?: string) {
-  const sq = squadOf(teamId);
-  const startersIds = tactics?.starters && Array.isArray(tactics.starters) && tactics.starters.length ? tactics.starters : sq.slice(0, 11).map(p => p.id);
-  const starters = startersIds.map(player).filter(Boolean);
-
-  let chemScore = 72;
-  const partnerships: Array<{ line: string; name: string; status: string; desc: string }> = [];
-
-  if (starters.length < 11) {
-    chemScore -= 15;
-    return {
-      score: 55,
-      level: "Некомплект состава",
-      grade: "D",
-      description: "Стартовый состав не укомплектован — связки разорваны.",
-      partnerships,
-      cohesionMultiplier: 0.82,
-      errorReduction: 0,
-      valueOf() { return this.score; },
-      toString() { return String(this.score); }
-    };
-  }
-
-  // 1. Стабильность костяка и опыт совместных игр в клубе
-  const corePlayers = starters.filter(p => (Number(p.seasonApps) || 0) >= 3 || !p.loanFrom);
-  if (corePlayers.length >= 9) {
-    chemScore += 12;
-    partnerships.push({ line: "Основа", name: "Костяк команды", status: "Отлично", desc: "9+ игроков регулярно выходят вместе, взаимопонимание на уровне автоматизма." });
-  } else if (corePlayers.length >= 6) {
-    chemScore += 5;
-    partnerships.push({ line: "Основа", name: "Костяк команды", status: "Хорошо", desc: "Базовый костяк сформирован, но есть новые лица." });
-  } else {
-    chemScore -= 14;
-    partnerships.push({ line: "Основа", name: "Масштабная ротация", status: "Слабо", desc: "Слишком много новичков или арендованных, связки сырые." });
-  }
-
-  // 2. Языковое и национальное единство
-  const nations: Record<string, number> = {};
-  starters.forEach(p => {
-    const n = String(p.nation || "Россия").trim();
-    nations[n] = (nations[n] || 0) + 1;
-  });
-  const maxNationCount = Math.max(...Object.values(nations));
-  if (maxNationCount >= 7) {
-    chemScore += 8;
-    partnerships.push({ line: "Коммуникация", name: "Единый язык", status: "Сыграны", desc: "Большинство игроков говорят на одном языке, подсказ на поле мгновенный." });
-  } else if (maxNationCount >= 5) {
-    chemScore += 3;
-  } else {
-    chemScore -= 5;
-    partnerships.push({ line: "Коммуникация", name: "Языковое разнообразие", status: "Внимание", desc: "Пестрый интернационал требует времени для адаптации." });
-  }
-
-  // 3. Связка центральных защитников (ЦЗ)
-  const cbs = starters.filter(p => p.pos === "ЦЗ");
-  if (cbs.length >= 2) {
-    const cb1 = cbs[0], cb2 = cbs[1];
-    const cbChem = (cb1.nation === cb2.nation || ((cb1.seasonApps || 0) > 3 && (cb2.seasonApps || 0) > 3));
-    if (cbChem) {
-      chemScore += 8;
-      partnerships.push({ line: "Оборона", name: `${cb1.name} — ${cb2.name}`, status: "Монолит", desc: "Центральная пара защитников слаженно держит линию офсайда и страхует друг друга." });
-    } else {
-      chemScore -= 4;
-      partnerships.push({ line: "Оборона", name: `${cb1.name} — ${cb2.name}`, status: "Притирка", desc: "Новая связка в центре обороны, возможны несогласованные действия." });
-    }
-  }
-
-  // 4. Ось центра поля (ОП / ЦП / АП)
-  const mids = starters.filter(p => ["ОП", "ЦП", "АП"].includes(p.pos));
-  if (mids.length >= 2) {
-    chemScore += 6;
-    partnerships.push({ line: "Центр поля", name: "Полузащита", status: "Сыграна", desc: "Быстрый разворот атак и надежный контроль темпа." });
-  }
-
-  // 5. Вратарь и оборона
-  const gk = starters.find(p => p.pos === "ВР");
-  if (gk && (gk.seasonApps || 0) >= 3) {
-    chemScore += 4;
-  }
-
-  chemScore = Math.min(98, Math.max(35, chemScore));
-
-  let level = "Хорошая сыгранность";
-  let grade = "B";
-  let description = "Игроки стабильно взаимодействуют на поле, минимум невынужденного брака.";
-
-  if (chemScore >= 88) {
-    level = "Исключительная сыгранность";
-    grade = "A+";
-    description = "Команда играет как единый живой организм: молниеносный пас в одно касание, идеальная синхронизация линий и взаимовыручка.";
-  } else if (chemScore >= 78) {
-    level = "Высокая сыгранность";
-    grade = "A";
-    description = "Отличное взаимопонимание между линиями, надежная позиционная страховка и быстрый выход из обороны.";
-  } else if (chemScore >= 65) {
-    level = "Рабочая сыгранность";
-    grade = "B-";
-    description = "Связки рабочие, однако в стрессовых фазах матча возможны недопонимания при передачах на ход.";
-  } else if (chemScore >= 50) {
-    level = "Средняя сыгранность";
-    grade = "C";
-    description = "Заметна несогласованность: игроки не всегда успевают открываться под передачу, случаются задержки с принятием решений.";
-  } else {
-    level = "Слабая сыгранность (состав перекроен)";
-    grade = "D";
-    description = "Множество новых игроков или масштабная ротация. Частый брак при выводе мяча из обороны, несогласованный прессинг.";
-  }
-
-  return {
-    score: chemScore,
-    level,
-    grade,
-    description,
-    partnerships,
-    cohesionMultiplier: +(0.8 + (chemScore / 100) * 0.4).toFixed(2),
-    errorReduction: +(chemScore >= 75 ? (chemScore - 70) * 0.005 : 0).toFixed(2),
-    valueOf() { return this.score; },
-    toString() { return String(this.score); }
-  };
-}
 var FIRST_NAMES = ["\u0410\u043B\u0435\u043A\u0441\u0430\u043D\u0434\u0440", "\u0421\u0435\u0440\u0433\u0435\u0439", "\u041C\u0438\u0445\u0430\u0438\u043B", "\u0414\u043C\u0438\u0442\u0440\u0438\u0439", "\u0410\u043D\u0434\u0440\u0435\u0439", "\u0410\u043B\u0435\u043A\u0441\u0435\u0439", "\u0412\u043B\u0430\u0434\u0438\u043C\u0438\u0440", "\u0418\u0433\u043E\u0440\u044C", "\u041E\u043B\u0435\u0433", "\u041F\u0430\u0432\u0435\u043B"];
 var LAST_NAMES = ["\u0418\u0432\u0430\u043D\u043E\u0432", "\u0421\u043C\u0438\u0440\u043D\u043E\u0432", "\u041A\u0443\u0437\u043D\u0435\u0446\u043E\u0432", "\u041F\u043E\u043F\u043E\u0432", "\u0412\u0430\u0441\u0438\u043B\u044C\u0435\u0432", "\u041F\u0435\u0442\u0440\u043E\u0432", "\u0421\u043E\u043A\u043E\u043B\u043E\u0432", "\u041C\u0438\u0445\u0430\u0439\u043B\u043E\u0432", "\u041D\u043E\u0432\u0438\u043A\u043E\u0432", "\u0424\u0435\u0434\u043E\u0440\u043E\u0432"];
 function randomName() {
@@ -2816,7 +2464,7 @@ try {
   SYS_DEFAULT = fs3.readFileSync(path3.join(__dirname, "prompt.txt"), "utf8");
 } catch {
   SYS_DEFAULT = `Ты — профессиональный российский футбольный комментатор и реалистичный симулятор матчей (Вирт РПЛ, Кубок России, Суперкубок, ФНЛ, товарищеские и стыковые матчи).
-Симулируй указанный отрезок матча максимально живо, тактически достоверно и строго учитывай все входные данные: силу и профиль игроков, сыгранность, тактику и синергию с тренером, судейскую манеру и VAR, погоду, усталость и календарь. Используй ТОЛЬКО игроков из переданных составов.
+Симулируй указанный отрезок матча максимально живо, тактически достоверно и строго учитывай все входные данные: силу и профиль игроков, тактику и профиль главного тренера, судейскую манеру и VAR, погоду, усталость и календарь. Используй ТОЛЬКО игроков из переданных составов.
 
 ═══ РАЗДЕЛ 0: ПРЕМАТЧ И ПОСТМАТЧ ═══
 • Прематч создавай ТОЛЬКО в первом отрезке матча (когда отрезок начинается с минуты 1). У каждого события прематча ОБЯЗАТЕЛЬНО указывай отрицательную минуту min от -15 до -1 (по порядку времени до стартового свистка).
@@ -6050,12 +5698,8 @@ async function buildCtx(f) {
   const cH = getCoachForTeam(f.home), cA = getCoachForTeam(f.away);
   const sH = getStaffForTeam(f.home), sA = getStaffForTeam(f.away);
   ctx.coaches = {
-    home: { coach: cH, synergy: computeCoachSynergy(cH, ctx.lineup.home, sH), staff: sH },
-    away: { coach: cA, synergy: computeCoachSynergy(cA, ctx.lineup.away, sA), staff: sA }
-  };
-  ctx.chemistry = {
-    home: computeTeamChemistry(f.home, ctx.lineup.home, f.date),
-    away: computeTeamChemistry(f.away, ctx.lineup.away, f.date)
+    home: { coach: cH, staff: sH },
+    away: { coach: cA, staff: sA }
   };
   ctx.teamStats = {
     home: teamStatsSummary(f.home, f.comp, lpH.compId),
@@ -6180,7 +5824,7 @@ function buildUser(ctx, a, b, st, issues, mode = "full") {
   const cInfo = (s) => {
     const c = ctx.coaches[s];
     const staffNote = ctx.staff?.[s] && ctx.staff[s] !== "\u043D\u0435\u0442 \u0434\u0430\u043D\u043D\u044B\u0445 \u043E \u0440\u0430\u0441\u0448\u0438\u0440\u0435\u043D\u043D\u043E\u043C \u0448\u0442\u0430\u0431\u0435" ? ` \u0422\u0440\u0435\u043D\u0435\u0440\u0441\u043A\u0438\u0439 \u0448\u0442\u0430\u0431: ${ctx.staff[s]}.` : "";
-    return `${c.coach.name} (${c.coach.nationality || "\u0420\u043E\u0441\u0441\u0438\u044F"}, ${c.coach.age || 45} \u043B\u0435\u0442, \u0444\u0438\u043B\u043E\u0441\u043E\u0444\u0438\u044F: ${c.coach.styleTitle || c.coach.style}). \u0425\u0430\u0440\u0430\u043A\u0442\u0435\u0440 \u043D\u0430 \u0431\u0440\u043E\u0432\u043A\u0435: ${c.coach.temperament || "\u0443\u0440\u0430\u0432\u043D\u043E\u0432\u0435\u0448\u0435\u043D\u043D\u044B\u0439"}. \u041B\u044E\u0431\u0438\u043C\u0430\u044F \u0441\u0445\u0435\u043C\u0430: ${c.coach.favoriteFormation || "4-3-3"}. \u0426\u0438\u0442\u0430\u0442\u0430: ${c.coach.quote || "\xAB\u0418\u0433\u0440\u0430\u0442\u044C \u043D\u0430 \u043F\u043E\u0431\u0435\u0434\u0443\xBB"}. \u0422\u0430\u043A\u0442\u0438\u0447\u0435\u0441\u043A\u0430\u044F \u0441\u0438\u043D\u0435\u0440\u0433\u0438\u044F: ${c.synergy.statusTitle} (${c.synergy.score}%). ${c.synergy.description}.${staffNote}`;
+    return `${c.coach.name} (${c.coach.nationality || "\u0420\u043E\u0441\u0441\u0438\u044F"}, ${c.coach.age || 45} \u043B\u0435\u0442, \u0444\u0438\u043B\u043E\u0441\u043E\u0444\u0438\u044F: ${c.coach.styleTitle || c.coach.style}). \u0425\u0430\u0440\u0430\u043A\u0442\u0435\u0440 \u043D\u0430 \u0431\u0440\u043E\u0432\u043A\u0435: ${c.coach.temperament || "\u0443\u0440\u0430\u0432\u043D\u043E\u0432\u0435\u0448\u0435\u043D\u043D\u044B\u0439"}. \u041B\u044E\u0431\u0438\u043C\u0430\u044F \u0441\u0445\u0435\u043C\u0430: ${c.coach.favoriteFormation || "4-3-3"}. \u0426\u0438\u0442\u0430\u0442\u0430: ${c.coach.quote || "\xAB\u0418\u0433\u0440\u0430\u0442\u044C \u043D\u0430 \u043F\u043E\u0431\u0435\u0434\u0443\xBB"}.${staffNote}`;
   };
   const refInfo = () => {
     const rc = ctx.refereeCrew;
@@ -6296,20 +5940,12 @@ ${refInfo()}
 - \u0412\u041B\u0418\u042F\u041D\u0418\u0415 \u0422\u0420\u0415\u041D\u0415\u0420\u041E\u0412 \u0418 \u0428\u0422\u0410\u0411\u0410 \u041D\u0410 \u041C\u0410\u0422\u0427: \u0427\u0435\u043C \u0432\u044B\u0448\u0435 \u0443\u0440\u043E\u0432\u0435\u043D\u044C \u0433\u043B\u0430\u0432\u043D\u043E\u0433\u043E \u0442\u0440\u0435\u043D\u0435\u0440\u0430 \u0438 \u0442\u0440\u0435\u043D\u0435\u0440\u0441\u043A\u043E\u0433\u043E \u0448\u0442\u0430\u0431\u0430 (\u0430\u0441\u0441\u0438\u0441\u0442\u0435\u043D\u0442, \u0444\u0438\u0437\u043F\u043E\u0434\u0433\u043E\u0442\u043E\u0432\u043A\u0430, \u0442\u0440\u0435\u043D\u0435\u0440 \u0432\u0440\u0430\u0442\u0430\u0440\u0435\u0439, \u0430\u043D\u0430\u043B\u0438\u0442\u0438\u043A, \u0432\u0440\u0430\u0447\u0438), \u0442\u0435\u043C \u043A\u0430\u0447\u0435\u0441\u0442\u0432\u0435\u043D\u043D\u0435\u0435 \u043F\u043E\u0434\u0433\u043E\u0442\u043E\u0432\u043B\u0435\u043D\u0430 \u043A\u043E\u043C\u0430\u043D\u0434\u0430, \u0442\u0435\u043C \u0432\u044B\u0448\u0435 \u043A\u043E\u043C\u0430\u043D\u0434\u043D\u0430\u044F \u0441\u043A\u043E\u0440\u043E\u0441\u0442\u044C, \u043B\u0443\u0447\u0448\u0435 \u0440\u0435\u0430\u043B\u0438\u0437\u0430\u0446\u0438\u044F \u043C\u043E\u043C\u0435\u043D\u0442\u043E\u0432 \u0438 \u0441\u0442\u0430\u043D\u0434\u0430\u0440\u0442\u043E\u0432, \u0430 \u0442\u0430\u043A\u0436\u0435 \u0432\u044B\u043D\u043E\u0441\u043B\u0438\u0432\u043E\u0441\u0442\u044C \u0432\u043E 2-\u043C \u0442\u0430\u0439\u043C\u0435 (\u043C\u0438\u043D\u0443\u0442\u044B 70\u201390). \u041F\u0440\u0438 \u0441\u043B\u0430\u0431\u043E\u043C \u0438\u043B\u0438 \u043D\u0435\u0434\u043E\u0443\u043A\u043E\u043C\u043F\u043B\u0435\u043A\u0442\u043E\u0432\u0430\u043D\u043D\u043E\u043C \u0448\u0442\u0430\u0431\u0435 \u043A\u043E\u043C\u0430\u043D\u0434\u0430 \u0431\u044B\u0441\u0442\u0440\u0435\u0435 \u0432\u044B\u0434\u044B\u0445\u0430\u0435\u0442\u0441\u044F \u0438 \u0434\u043E\u043F\u0443\u0441\u043A\u0430\u0435\u0442 \u043B\u044F\u043F\u044B \u0432 \u043A\u043E\u043D\u0446\u043E\u0432\u043A\u0430\u0445!
 `;
   u += `6. \u0422\u0420\u0415\u041D\u0418\u0420\u041E\u0412\u041E\u0427\u041D\u042B\u0419 \u041F\u0420\u041E\u0426\u0415\u0421\u0421 \u0418 \u041F\u0420\u0415\u0414\u041C\u0410\u0422\u0427\u0415\u0412\u042B\u0419 \u041F\u041B\u0410\u041D:
-- \u041D\u0435\u0434\u0435\u043B\u044C\u043D\u044B\u0439 \u0446\u0438\u043A\u043B ${H}: ${tr("home")} (\u044D\u0444\u0444\u0435\u043A\u0442\u0438\u0432\u043D\u043E\u0441\u0442\u044C \u0448\u0442\u0430\u0431\u0430: ${ctx.coaches.home.synergy.trainingQuality || "\u0441\u0442\u0430\u043D\u0434\u0430\u0440\u0442\u043D\u0430\u044F"})
-- \u041D\u0435\u0434\u0435\u043B\u044C\u043D\u044B\u0439 \u0446\u0438\u043A\u043B ${A}: ${tr("away")} (\u044D\u0444\u0444\u0435\u043A\u0442\u0438\u0432\u043D\u043E\u0441\u0442\u044C \u0448\u0442\u0430\u0431\u0430: ${ctx.coaches.away.synergy.trainingQuality || "\u0441\u0442\u0430\u043D\u0434\u0430\u0440\u0442\u043D\u0430\u044F"})
+- \u041D\u0435\u0434\u0435\u043B\u044C\u043D\u044B\u0439 \u0446\u0438\u043A\u043B ${H}: ${tr("home")}
+- \u041D\u0435\u0434\u0435\u043B\u044C\u043D\u044B\u0439 \u0446\u0438\u043A\u043B ${A}: ${tr("away")}
 `;
-  u += `7. \u0422\u0410\u041A\u0422\u0418\u0427\u0415\u0421\u041A\u0418\u0415 \u0421\u0425\u0415\u041C\u042B, \u0423\u0421\u0422\u0410\u041D\u041E\u0412\u041A\u0410 \u041D\u0410 \u0418\u0413\u0420\u0423 \u0418 \u0421\u0418\u041D\u0415\u0420\u0413\u0418\u042F \u0421\u041E \u0421\u0422\u0418\u041B\u0415\u041C \u0422\u0420\u0415\u041D\u0415\u0420\u0410:
+  u += `7. \u0422\u0410\u041A\u0422\u0418\u0427\u0415\u0421\u041A\u0418\u0415 \u0421\u0425\u0415\u041C\u042B \u0418 \u0423\u0421\u0422\u0410\u041D\u041E\u0412\u041A\u0410 \u041D\u0410 \u0418\u0413\u0420\u0423:
 - ${H} (\u0441\u0445\u0435\u043C\u0430 ${ctx.lineup.home.formation}): ${sp("home")}
-  [\u0421\u0438\u043D\u0435\u0440\u0433\u0438\u044F \u0441\u0442\u0438\u043B\u044F: ${ctx.coaches.home.synergy.statusTitle} (${ctx.coaches.home.synergy.score}%). \u0421\u043E\u0432\u043C\u0435\u0441\u0442\u0438\u043C\u043E\u0441\u0442\u044C: ${ctx.coaches.home.synergy.styleFitLabel}. \u042D\u0444\u0444\u0435\u043A\u0442: ${ctx.coaches.home.synergy.inGameEffect}]
 - ${A} (\u0441\u0445\u0435\u043C\u0430 ${ctx.lineup.away.formation}): ${sp("away")}
-  [\u0421\u0438\u043D\u0435\u0440\u0433\u0438\u044F \u0441\u0442\u0438\u043B\u044F: ${ctx.coaches.away.synergy.statusTitle} (${ctx.coaches.away.synergy.score}%). \u0421\u043E\u0432\u043C\u0435\u0441\u0442\u0438\u043C\u043E\u0441\u0442\u044C: ${ctx.coaches.away.synergy.styleFitLabel}. \u042D\u0444\u0444\u0435\u043A\u0442: ${ctx.coaches.away.synergy.inGameEffect}]
-- \u041A\u0420\u0418\u0422\u0418\u0427\u0415\u0421\u041A\u041E\u0415 \u041F\u0420\u0410\u0412\u0418\u041B\u041E \u0421\u0418\u041D\u0415\u0420\u0413\u0418\u0418: \u0415\u0441\u043B\u0438 \u0441\u0442\u0438\u043B\u044C \u0438\u0433\u0440\u044B, \u043A\u043E\u0442\u043E\u0440\u044B\u0439 \u0437\u0430\u0434\u0430\u043D \u043F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u0442\u0435\u043B\u0435\u043C \u0432 \u0443\u0441\u0442\u0430\u043D\u043E\u0432\u043A\u0435, \u041D\u0415 \u043F\u043E\u0434\u0445\u043E\u0434\u0438\u0442 \u043F\u043E\u0434 \u0441\u0442\u0438\u043B\u044C \u0442\u0440\u0435\u043D\u0435\u0440\u0430 (\u043D\u0430\u043F\u0440\u0438\u043C\u0435\u0440, \u0442\u0440\u0435\u0431\u043E\u0432\u0430\u043D\u0438\u0435 \u0433\u043B\u0443\u0445\u043E\u0439 \u043E\u0431\u043E\u0440\u043E\u043D\u044B \u043E\u0442 \u0442\u0440\u0435\u043D\u0435\u0440\u0430 \u0430\u0442\u0430\u043A\u0443\u044E\u0449\u0435\u0439 \u0444\u0438\u043B\u043E\u0441\u043E\u0444\u0438\u0438 \u0438\u043B\u0438 \u0431\u0435\u0437\u0440\u0430\u0441\u0441\u0443\u0434\u043D\u044B\u0439 \u0448\u0442\u0443\u0440\u043C \u0431\u0435\u0437 \u043F\u043E\u043B\u0443\u0437\u0430\u0449\u0438\u0442\u044B \u043E\u0442 \u0441\u0442\u0440\u043E\u0433\u043E\u0433\u043E \u043E\u0431\u043E\u0440\u043E\u043D\u0438\u0442\u0435\u043B\u044C\u043D\u043E\u0433\u043E \u0442\u0440\u0435\u043D\u0435\u0440\u0430), \u043A\u043E\u043C\u0430\u043D\u0434\u0430 \u0438\u0433\u0440\u0430\u0435\u0442 \u0425\u0423\u0416\u0415: \u0431\u043E\u043B\u044C\u0448\u0435 \u043F\u043E\u0437\u0438\u0446\u0438\u043E\u043D\u043D\u044B\u0445 \u043E\u0448\u0438\u0431\u043E\u043A, \u043F\u043E\u0442\u0435\u0440\u0438 \u0432 \u0446\u0435\u043D\u0442\u0440\u0435 \u043F\u043E\u043B\u044F, \u043D\u0435\u0441\u043E\u0433\u043B\u0430\u0441\u043E\u0432\u0430\u043D\u043D\u044B\u0439 \u043F\u0440\u0435\u0441\u0441\u0438\u043D\u0433 \u0438 \u043F\u0440\u043E\u0432\u0430\u043B\u044B \u0432 \u043F\u0435\u0440\u0435\u0445\u043E\u0434\u043D\u044B\u0445 \u0444\u0430\u0437\u0430\u0445! \u0418 \u043D\u0430\u043E\u0431\u043E\u0440\u043E\u0442, \u043A\u043E\u0433\u0434\u0430 \u0443\u0441\u0442\u0430\u043D\u043E\u0432\u043A\u0430 \u0433\u0430\u0440\u043C\u043E\u043D\u0438\u0440\u0443\u0435\u0442 \u0441\u043E \u0441\u0442\u0438\u043B\u0435\u043C \u0442\u0440\u0435\u043D\u0435\u0440\u0430 \u2014 \u043A\u043E\u043C\u0430\u043D\u0434\u0430 \u0434\u0435\u0439\u0441\u0442\u0432\u0443\u0435\u0442 \u043D\u0430 \u043A\u0443\u0440\u0430\u0436\u0435, \u0431\u044B\u0441\u0442\u0440\u043E \u043A\u043E\u043C\u0431\u0438\u043D\u0438\u0440\u0443\u0435\u0442 \u0438 \u0434\u0438\u0441\u0446\u0438\u043F\u043B\u0438\u043D\u0438\u0440\u043E\u0432\u0430\u043D\u043D\u043E \u0432\u0441\u0442\u0440\u0435\u0447\u0430\u0435\u0442 \u0441\u043E\u043F\u0435\u0440\u043D\u0438\u043A\u0430.
-`;
-  u += `7.1. \u0421\u042B\u0413\u0420\u0410\u041D\u041D\u041E\u0421\u0422\u042C \u0421\u041E\u0421\u0422\u0410\u0412\u0410 (TEAM CHEMISTRY):
-- \u0421\u044B\u0433\u0440\u0430\u043D\u043D\u043E\u0441\u0442\u044C ${H}: ${ctx.chemistry?.home?.score || 75}% (${ctx.chemistry?.home?.level || "\u0425\u043E\u0440\u043E\u0448\u0430\u044F"}). ${ctx.chemistry?.home?.description || ""}
-- \u0421\u044B\u0433\u0440\u0430\u043D\u043D\u043E\u0441\u0442\u044C ${A}: ${ctx.chemistry?.away?.score || 75}% (${ctx.chemistry?.away?.level || "\u0425\u043E\u0440\u043E\u0448\u0430\u044F"}). ${ctx.chemistry?.away?.description || ""}
-- \u041F\u0420\u0410\u0412\u0418\u041B\u041E \u0421\u042B\u0413\u0420\u0410\u041D\u041D\u041E\u0421\u0422\u0418: \u0421\u044B\u0433\u0440\u0430\u043D\u043D\u043E\u0441\u0442\u044C \u043D\u0430\u043F\u0440\u044F\u043C\u0443\u044E \u0432\u043B\u0438\u044F\u0435\u0442 \u043D\u0430 \u0440\u0438\u0441\u0443\u043D\u043E\u043A \u0438\u0433\u0440\u044B! \u041F\u0440\u0438 \u0432\u044B\u0441\u043E\u043A\u043E\u0439 \u0441\u044B\u0433\u0440\u0430\u043D\u043D\u043E\u0441\u0442\u0438 (80%+) \u0438\u0433\u0440\u043E\u043A\u0438 \u0431\u044B\u0441\u0442\u0440\u043E \u043D\u0430\u0445\u043E\u0434\u044F\u0442 \u0430\u0434\u0440\u0435\u0441\u0430\u0442\u0430 \u0432 \u043E\u0434\u043D\u043E \u043A\u0430\u0441\u0430\u043D\u0438\u0435, \u043B\u0438\u043D\u0438\u044F \u043E\u0431\u043E\u0440\u043E\u043D\u044B \u0441\u0438\u043D\u0445\u0440\u043E\u043D\u043D\u043E \u0434\u0435\u0440\u0436\u0438\u0442 \u0438\u0441\u043A\u0443\u0441\u0441\u0442\u0432\u0435\u043D\u043D\u044B\u0439 \u043E\u0444\u0441\u0430\u0439\u0434, \u0432\u0440\u0430\u0442\u0430\u0440\u044C \u0438 \u0437\u0430\u0449\u0438\u0442\u043D\u0438\u043A\u0438 \u043D\u0435 \u0441\u0442\u0430\u043B\u043A\u0438\u0432\u0430\u044E\u0442\u0441\u044F \u043D\u0430 \u0432\u044B\u0445\u043E\u0434\u0430\u0445. \u041F\u0440\u0438 \u043D\u0438\u0437\u043A\u043E\u0439 \u0441\u044B\u0433\u0440\u0430\u043D\u043D\u043E\u0441\u0442\u0438 (<60% \u2014 \u0440\u043E\u0442\u0430\u0446\u0438\u044F \u0438\u043B\u0438 \u043C\u043D\u043E\u0433\u043E \u043D\u043E\u0432\u0438\u0447\u043A\u043E\u0432) \u043A\u043E\u043C\u0430\u043D\u0434\u0430 \u0434\u043E\u043F\u0443\u0441\u043A\u0430\u0435\u0442 \u0433\u043B\u0443\u043F\u044B\u0435 \u043E\u0448\u0438\u0431\u043A\u0438, \u043E\u0431\u0440\u0435\u0437\u044B, \u0440\u0430\u0441\u0441\u0438\u043D\u0445\u0440\u043E\u043D \u043F\u0440\u0438 \u0432\u044B\u0445\u043E\u0434\u0435 \u0438\u0437 \u043E\u0431\u043E\u0440\u043E\u043D\u044B.
 `;
   {
     const forcedNotes = (s: string, label: string) => {
@@ -6744,11 +6380,7 @@ function fakePeriod(a, b, ctx, prev) {
     const s = hold, o = s === "home" ? "away" : "home", P = onP(s), Q = onP(o);
     if (!P.length || !Q.length) continue;
     
-    // Factors from Coach, Staff and Team Chemistry
-    const synS = ctx.coaches?.[s]?.synergy;
-    const synO = ctx.coaches?.[o]?.synergy;
-    const chemS = ctx.chemistry?.[s];
-    const chemO = ctx.chemistry?.[o];
+    // Factors from fatigue, out-of-position and league tier gap
     const fitnessS = ctx.coaches?.[s]?.fitnessBonus || 1.0;
     const fatMapS = ctx.fatigue?.[s] || {};
     const tiredCountS = P.filter((pid) => fatMapS[pid]?.level === "exhausted" || fatMapS[pid]?.level === "tired").length;
@@ -6763,8 +6395,8 @@ function fakePeriod(a, b, ctx, prev) {
     const classAttackFactor = Math.max(0.65, Math.min(1.45, 1 + tierGap * 0.12));
     const classGoalFactor = Math.max(0.7, Math.min(1.35, 1 + tierGap * 0.08));
 
-    // Turnover probability modified by coach tactical clash, chemistry, out-of-position, personal fatigue and league tier gap
-    const errFactor = (synS?.errorMultiplier || 1) * (chemS?.errorReduction || 1) + lateFatiguePenalty + posPenalty;
+    // Turnover probability modified by out-of-position, personal fatigue and league tier gap
+    const errFactor = 1 + lateFatiguePenalty + posPenalty;
     const baseSwitchProb = 0.28 * Math.min(1.65, Math.max(0.6, errFactor)) * classPossFactor;
     if (R() < baseSwitchProb) hold = hold === "home" ? "away" : "home";
 
@@ -6777,15 +6409,14 @@ function fakePeriod(a, b, ctx, prev) {
       const pid = rolesS[roleKey];
       return pid && P.includes(pid) ? pid : null;
     };
-    const shotThreshold = 0.13 * (synS?.xgMultiplier || 1) * (chemS?.cohesionMultiplier || 1) * classAttackFactor;
+    const shotThreshold = 0.13 * classAttackFactor;
     if (r < shotThreshold) {
       const sh = pick(P.filter((p) => GROUP[ctx.pos[p]] !== "gk")) || P[0];
       const gk = Q.find((p) => ctx.pos[p] === "ВР") || Q[0];
-      const x = +(0.04 + R() * 0.25 * (synS?.xgMultiplier || 1) * Math.max(0.75, Math.min(1.3, 1 + tierGap * 0.07))).toFixed(2);
+      const x = +(0.04 + R() * 0.25 * Math.max(0.75, Math.min(1.3, 1 + tierGap * 0.07))).toFixed(2);
       push(m, 20, s, "shot", [sh], `${ctx.names[sh]} бьёт по воротам!`, { xg: x });
       const q2 = R();
-      // Goal threshold adjusted for attacker synergy/chemistry vs opponent defense/chemistry and league tier gap
-      const goalThreshold = 0.22 * (synS?.xgMultiplier || 1) / (chemO?.cohesionMultiplier || 1) * classGoalFactor;
+      const goalThreshold = 0.22 * classGoalFactor;
       if (q2 < goalThreshold) {
         push(m, 23, s, "goal", [sh, p2 !== sh ? p2 : p1], `ГОЛ! ${ctx.names[sh]} переигрывает вратаря!`);
       } else if (q2 < 0.6) {
@@ -9032,8 +8663,6 @@ var pubTeam = (t) => {
   const official = getTeamLogo(t.name, null, t.comp);
   const coach = getCoachForTeam(t.id);
   const staff = getStaffForTeam(t.id);
-  const synergy = computeCoachSynergy(coach, db.tactics[t.id], staff);
-  const chemistry = computeTeamChemistry(t.id, db.tactics[t.id]);
   return {
     id: t.id,
     name: t.name,
@@ -9043,8 +8672,6 @@ var pubTeam = (t) => {
     logo: official.startsWith("/assets/") ? official : t.logo || official,
     colors: getTeamColors(t.name),
     coach,
-    synergy,
-    chemistry,
     staff,
     budget: t.budget || 0,
     formattedBudget: "€" + (t.budget || 0).toLocaleString("ru-RU")
@@ -9471,12 +9098,8 @@ app.get("/api/match/:id", (req, res) => {
     motm: motmOut,
     ratings: m?.ratings || (f.status === "done" && m ? computeMatchRatings(m, f, HName, AName) : []),
     coaches: {
-      home: { coach: coachHome, synergy: computeCoachSynergy(coachHome, db.tactics[f.home], getStaffForTeam(f.home)), staff: getStaffForTeam(f.home) },
-      away: { coach: coachAway, synergy: computeCoachSynergy(coachAway, db.tactics[f.away], getStaffForTeam(f.away)), staff: getStaffForTeam(f.away) }
-    },
-    chemistry: m?.ctx?.chemistry || {
-      home: computeTeamChemistry(f.home, db.tactics[f.home], f.date),
-      away: computeTeamChemistry(f.away, db.tactics[f.away], f.date)
+      home: { coach: coachHome, staff: getStaffForTeam(f.home) },
+      away: { coach: coachAway, staff: getStaffForTeam(f.away) }
     },
     h2h: getHeadToHead(f.home, f.away, f.id)
   };
@@ -10703,14 +10326,12 @@ ${rivalsText}
 app.get("/api/coaches", (req, res) => {
   const list = db.teams.map((t) => {
     const coach = getCoachForTeam(t.id);
-    const synergy = computeCoachSynergy(coach, db.tactics[t.id]);
     return {
       teamId: t.id,
       teamName: t.name,
       comp: t.comp,
       logo: teamLogo(t.id),
-      coach,
-      synergy
+      coach
     };
   });
   res.json(list);
@@ -10719,8 +10340,7 @@ app.get("/api/coach/:teamId", (req, res) => {
   const t = team(req.params.teamId);
   if (!t) return fail(res, "\u041A\u043B\u0443\u0431 \u043D\u0435 \u043D\u0430\u0439\u0434\u0435\u043D", 404);
   const coach = getCoachForTeam(t.id);
-  const synergy = computeCoachSynergy(coach, db.tactics[t.id]);
-  res.json({ team: pubTeam(t), coach, synergy });
+  res.json({ team: pubTeam(t), coach });
 });
 app.post("/api/coach/:teamId", admin, (req, res) => {
   const t = team(req.params.teamId);
@@ -12070,14 +11690,6 @@ app.post("/api/club/tactics/preview", needClub, (req, res) => {
   const staff = getStaffForTeam(req.tid);
   const fm = req.body.formation || "4-3-3";
   const starters = Array.isArray(req.body.starters) ? req.body.starters : [];
-  const tacticalDraft = {
-    formation: fm,
-    speech: req.body.speech || "",
-    training: req.body.training || "",
-    starters
-  };
-  const synergy = computeCoachSynergy(coach, tacticalDraft, staff);
-  const chemistry = computeTeamChemistry(req.tid, tacticalDraft);
   const slotResult = starters.length ? assignFormationSlots(fm, starters, req.body.slots) : { entries: [], byPid: {} };
   const fObj = req.body.fid ? fx(req.body.fid) : null;
   const fatCalc = computePlayerFatigue(req.tid, fObj || { date: (/* @__PURE__ */ new Date()).toISOString().slice(0, 10) });
@@ -12086,7 +11698,7 @@ app.post("/api/club/tactics/preview", needClub, (req, res) => {
     const fi = fatCalc.forPlayer(pid);
     return p && (fi.level === "exhausted" || fi.level === "tired") ? { pid, name: p.name, level: fi.level, label: fi.label } : null;
   }).filter(Boolean);
-  res.json({ ok: 1, synergy, chemistry, coach, staff, slots: slotResult.entries, fatigueWarnings });
+  res.json({ ok: 1, coach, staff, slots: slotResult.entries, fatigueWarnings });
 });
 app.get("/api/admin/overview", admin, (req, res) => {
   syncSecretsFromDisk();
@@ -13915,7 +13527,7 @@ function buildAnalyticalStaffPortrait(m) {
   m.nationality = m.nationality || "Россия";
   m.age = m.age || 45;
   m.specialty = m.specialty || roleMeta?.desc || "Организация тренировочного процесса";
-  m.bio = m.bio || `${m.name} входит в тренерский штаб команды «${clubName}». Отвечает за профессиональную подготовку и командную сыгранность.`;
+  m.bio = m.bio || `${m.name} входит в тренерский штаб команды «${clubName}». Отвечает за профессиональную подготовку команды.`;
   if (m.role === "head") {
     m.style = m.style || "possession";
     m.styleTitle = m.styleTitle || "Сбалансированный и дисциплинированный футбол";

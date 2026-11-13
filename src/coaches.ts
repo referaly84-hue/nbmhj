@@ -105,18 +105,6 @@ export function getTeamCoach(name: string, comp?: string): Coach {
   };
 }
 
-export function computeCoachSynergy(coach: any, tactics: any): number {
-  if (!coach || !tactics) return 75;
-  let score = 70;
-  if (coach.formation && tactics.formation && coach.formation === tactics.formation) {
-    score += 15;
-  }
-  if (coach.style && tactics.style && coach.style.toLowerCase().includes(tactics.style.toLowerCase())) {
-    score += 15;
-  }
-  return Math.min(100, Math.max(40, score));
-}
-
 const FIRST_NAMES = ['Александр', 'Сергей', 'Михаил', 'Дмитрий', 'Андрей', 'Алексей', 'Владимир', 'Игорь', 'Олег', 'Павел'];
 const LAST_NAMES = ['Иванов', 'Смирнов', 'Кузнецов', 'Попов', 'Васильев', 'Петров', 'Соколов', 'Михайлов', 'Новиков', 'Федоров'];
 

@@ -3283,10 +3283,6 @@ function paintMatch() {
       const canSeeTactics = S.me?.role === 'admin' || (S.me?.teamId && S.me.teamId === sideTid) || sideLineup.speech !== undefined;
       const coachData = M.coaches?.[s];
       const coachInfo = coachData?.coach;
-      const synergy = coachData?.synergy;
-      const chem = M.chemistry?.[s];
-      const synScore = synergy ? Math.round(synergy.score || +synergy || 70) : null;
-      const chemScore = chem ? Math.round(chem.score || 70) : null;
 
       return `<div class="panel">
         <div class="row" style="margin-bottom:12px">
@@ -3295,15 +3291,7 @@ function paintMatch() {
         </div>
         ${coachInfo ? `
         <div style="background:rgba(255,255,255,0.03);border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin-bottom:12px">
-          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
-            <div><b>👔 Тренер:</b> ${e(coachInfo.name)} <span class="muted small">(${e(coachInfo.styleTitle || coachInfo.style || 'Тренер')})</span></div>
-            ${synScore !== null ? `<span class="tag" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;font-weight:700">Синергия: ${synScore}%</span>` : ''}
-          </div>
-          ${chem ? `
-          <div style="margin-top:6px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px">
-            <div><b>🤝 Сыгранность:</b> <span style="font-weight:700;color:${chemScore >= 75 ? '#10b981' : chemScore >= 55 ? '#f59e0b' : '#ef4444'}">${chemScore}% (${e(chem.grade || 'Хорошая')})</span></div>
-            <span class="muted small">${e(chem.description || '')}</span>
-          </div>` : ''}
+          <div><b>👔 Тренер:</b> ${e(coachInfo.name)} <span class="muted small">(${e(coachInfo.styleTitle || coachInfo.style || 'Тренер')})</span></div>
         </div>` : ''}
         <h4 style="margin:0 0 6px">Стартовый состав (11)</h4>
         ${sideLineup.starters?.length ? sideLineup.starters.map(p => {
@@ -3340,10 +3328,6 @@ function paintMatch() {
           <span class="tag" style="font-size:10.5px;background:#e8f0fe;color:#1a73e8;border-color:#aecbfa">только для клуба</span>
         </h4>
         <div class="qa">${e(sideLineup.speech || '(установка не заполнена)')}</div>
-        ${synergy?.styleFit ? `
-        <div style="margin-top:6px;padding:8px 10px;border-radius:6px;font-size:12px;line-height:1.4;background:${synergy.styleFit === 'conflict' ? 'rgba(239,68,68,0.12)' : synergy.styleFit === 'perfect' ? 'rgba(16,185,129,0.12)' : 'rgba(59,130,246,0.12)'};border:1px solid ${synergy.styleFit === 'conflict' ? '#f87171' : synergy.styleFit === 'perfect' ? '#34d399' : '#60a5fa'}">
-          <b>${e(synergy.styleFitLabel || '')}:</b> ${e(synergy.inGameEffect || synergy.description || '')}
-        </div>` : ''}
         ${sideLineup.training ? `
         <h4 style="margin-top:14px;margin-bottom:6px">Тренировочный план</h4>
         <div class="qa">${e(sideLineup.training)}</div>` : ''}
@@ -6274,7 +6258,7 @@ function lineupForm(box, f, c, withT, app) {
   <label>Тактика — всё, что тренер говорит игрокам перед матчем</label><textarea class="sp1" placeholder="Пишите как есть: установка, настрой, речь. Молчание — тоже речь.">${e(L.speech || '')}</textarea>
   <label>Тренировочный план перед матчем (произвольный текст)</label><textarea class="tr1" placeholder="Например: пн — отдых, вт — прессинг 2 часа, ср — стандарты, чт — разминка, пт — отдых">${e(L.training || '')}</textarea>
   <div id="tactical_preview_widget" style="margin:14px 0;padding:12px 14px;background:rgba(255,255,255,0.04);border:1px solid var(--line);border-radius:10px;font-size:12.5px;line-height:1.45">
-    <div class="muted small">⏳ Анализ тактической совместимости и сыгранности…</div>
+    <div class="muted small">⏳ Анализ состава, позиций и усталости…</div>
   </div>
   <div class="row" style="margin-top:14px"><button class="btn save">Сохранить</button><span class="muted small">Состав можно менять до начала матча.</span></div>`;
 
@@ -6435,47 +6419,16 @@ function lineupForm(box, f, c, withT, app) {
     try {
       const res = await api('/club/tactics/preview', withT({ fid: f.id, starters, speech, training, formation, slots: slotsPayload }));
       if (!res || !res.ok) return;
-      const syn = res.synergy || {};
-      const chem = res.chemistry || {};
       const coach = res.coach || c.team?.coach;
-      const score = Math.round(syn.score || +syn || 70);
-      const chemScore = Math.round(chem.score || 70);
       const slotEntries = Array.isArray(res.slots) ? res.slots : [];
       const forcedSlots = slotEntries.filter(x => x.fit && (x.fit.severity === 'forced' || x.fit.severity === 'critical'));
       const minorSlots = slotEntries.filter(x => x.fit && x.fit.severity === 'minor');
       const fatWarns = Array.isArray(res.fatigueWarnings) ? res.fatigueWarnings : [];
 
-      const fitBg = syn.styleFit === 'conflict' ? 'rgba(239,68,68,0.12)' : syn.styleFit === 'perfect' ? 'rgba(16,185,129,0.12)' : 'rgba(59,130,246,0.12)';
-      const fitColor = syn.styleFit === 'conflict' ? '#ef4444' : syn.styleFit === 'perfect' ? '#10b981' : '#3b82f6';
-      const fitBorder = syn.styleFit === 'conflict' ? '#f87171' : syn.styleFit === 'perfect' ? '#34d399' : '#60a5fa';
-
       liveBox.innerHTML = `
-        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">
-          <div style="font-weight:700;font-size:13px;display:flex;align-items:center;gap:6px">
-            <span>👔 Тренерский штаб и тактический стиль</span>
-          </div>
-          <div style="display:flex;gap:6px;flex-wrap:wrap">
-            <span class="tag" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;font-weight:700">Синергия: ${score}%</span>
-            <span class="tag" style="background:#eff6ff;color:#1e40af;border-color:#bfdbfe;font-weight:700">Штаб: ${syn.staffQuality || 70}/100</span>
-          </div>
-        </div>
-        ${coach ? `<div class="muted small" style="margin-bottom:6px"><b>Главный тренер:</b> ${e(coach.name)} (профиль: ${e(coach.styleTitle || coach.style || 'сбалансированный')}, схема: ${e(coach.favoriteFormation || '4-3-3')})</div>` : ''}
-        <div style="padding:8px 10px;border-radius:6px;background:${fitBg};border:1px solid ${fitBorder};color:${fitColor};font-weight:600;margin-bottom:8px">
-          ${syn.styleFit === 'conflict' ? '⚠️ ' : syn.styleFit === 'perfect' ? '✅ ' : 'ℹ️ '} ${e(syn.styleFitLabel || '')}: ${e(syn.inGameEffect || syn.description || '')}
-        </div>
-        <div style="margin-top:10px;padding-top:10px;border-top:1px dashed var(--line)">
-          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:4px">
-            <div><b>🤝 Сыгранность стартовых 11:</b> <span style="font-weight:700;color:${chemScore >= 75 ? '#10b981' : chemScore >= 55 ? '#f59e0b' : '#ef4444'}">${chemScore}% (${e(chem.grade || 'Удовлетворительная')})</span></div>
-            <span class="tag" style="font-size:11px">${starters.length === 11 ? 'Полный состав 11' : starters.length + '/11 игроков'}</span>
-          </div>
-          <div class="muted small">${e(chem.description || '')}</div>
-          ${chem.partnerships && chem.partnerships.length ? `
-          <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px">
-            ${chem.partnerships.map(pt => `<span class="tag" style="font-size:11px;background:rgba(255,255,255,0.06)">${e(pt)}</span>`).join('')}
-          </div>` : ''}
-        </div>
+        ${coach ? `<div class="muted small" style="margin-bottom:6px"><b>👔 Главный тренер:</b> ${e(coach.name)} (профиль: ${e(coach.styleTitle || coach.style || 'сбалансированный')}, схема: ${e(coach.favoriteFormation || '4-3-3')})</div>` : ''}
         ${slotEntries.length === 11 ? `
-        <div style="margin-top:10px;padding-top:10px;border-top:1px dashed var(--line)">
+        <div style="margin-top:6px">
           <div style="font-weight:700;margin-bottom:4px">🧭 Соответствие позициям в схеме</div>
           ${forcedSlots.length
             ? forcedSlots.map(x => `<div class="small" style="color:#b45309">⚠️ <b>${e(poolById[x.pid]?.name || x.pid)}</b> (${e(x.naturalPos)} → <b>${e(x.slotPos)}</b>): ${e(x.fit.note || x.fit.label)}</div>`).join('')
