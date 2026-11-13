@@ -5576,7 +5576,37 @@ function computePlayerFatigue(tid: string, f: any) {
       level = "fresh";
       label = "свежий (начало игрового отрезка)";
     }
-    return { level, label, min10d, min14d, apps10d, apps14d, full10d, full14d, starts14d, subApps14d, consecutiveStarts, lastMatchDaysAgo, lastMatchMin };
+    let penalty = 0;
+    if (lastMatchDaysAgo !== null && lastMatchDaysAgo <= 4 && lastMatchMin > 0) {
+      const recWeight = lastMatchDaysAgo <= 1 ? 28 : lastMatchDaysAgo === 2 ? 21 : lastMatchDaysAgo === 3 ? 14 : 7;
+      penalty += Math.round((Math.min(120, lastMatchMin) / 90) * recWeight);
+    }
+    penalty += Math.round(Math.max(0, min10d - 90) * 0.14);
+    penalty += Math.round(Math.max(0, min14d - 180) * 0.07);
+    if (consecutiveStarts >= 3) penalty += (consecutiveStarts - 2) * 5;
+
+    let readiness = 100;
+    let shortText = "Готов";
+    let statusCode = "ready";
+    if (level === "exhausted") {
+      readiness = Math.max(25, Math.min(48, 72 - penalty));
+      shortText = "Истощён";
+      statusCode = "rest";
+    } else if (level === "tired") {
+      readiness = Math.max(52, Math.min(73, 88 - penalty));
+      shortText = "Устал";
+      statusCode = "caution";
+    } else if (level === "moderate") {
+      readiness = Math.max(76, Math.min(89, 96 - penalty));
+      shortText = "В тонусе";
+      statusCode = "ready";
+    } else {
+      readiness = apps14d === 0 ? 100 : Math.max(90, Math.min(98, 100 - Math.round(min14d * 0.08)));
+      shortText = "Готов";
+      statusCode = "ready";
+    }
+    const readyToPlay = level !== "exhausted";
+    return { level, label, readiness, readyToPlay, shortText, statusCode, min10d, min14d, apps10d, apps14d, full10d, full14d, starts14d, subApps14d, consecutiveStarts, lastMatchDaysAgo, lastMatchMin };
   };
   return { forPlayer, teamRecent14Count };
 }
@@ -10966,23 +10996,22 @@ app.get("/api/club", needClub, (req, res) => {
     fromLogo: teamLogo(x.from),
     toName: tn(x.to) || x.toName
   }));
-  res.json({
-    team: { ...pubTeam(t), code: req.me.role === "admin" ? t.code : void 0 },
-    squadMax: db.settings.squadMax,
-    legionLimit,
-    legionSquadCount,
-    squadSubmitted: !!db.squads[req.tid],
-    staffSlots: staffSlots(req.tid),
-    staffOffers: staffOffersFor(req.tid),
-    family: sisterIdsOf(req.tid).map((id) => ({ id, name: tn(id), logo: teamLogo(id), comp: team(id)?.comp })),
-    squad: sq.map((p) => ({ ...pubPlayer(p), available: isAvail(p, today), unavailText: unavailText(p, today), card: p })),
-    tactic: db.tactics[req.tid] || null,
-    upcoming: up.map((f) => ({
-      ...pubFx(f),
-      lineup: db.lineups[f.id + ":" + req.tid] || null,
-      auto: getLineup(f, req.tid),
-      techRisk: techProblems(f, req.tid).filter((x) => x !== "\u043D\u0435 \u043F\u043E\u0434\u0430\u043D \u0441\u043E\u0441\u0442\u0430\u0432 \u043D\u0430 \u043C\u0430\u0442\u0447"),
-      loanPool: loanPoolFor(req.tid, f).map((x) => ({
+  const isAdmin = req.me?.role === "admin";
+  const refDate = up[0]?.date || today;
+  const squadFatCalc = isAdmin ? computePlayerFatigue(req.tid, { date: refDate, id: up[0]?.id }) : null;
+  const upcomingWithFatigue = up.map((f) => {
+    const fFatCalc = isAdmin ? computePlayerFatigue(req.tid, f) : null;
+    const lPool = loanPoolFor(req.tid, f);
+    const fatigueByPid: Record<string, any> | undefined = isAdmin ? {} : void 0;
+    const availByPid: Record<string, { available: boolean; unavailText: string }> = {};
+    for (const p of sq) {
+      if (isAdmin && fFatCalc && fatigueByPid) fatigueByPid[p.id] = fFatCalc.forPlayer(p.id);
+      availByPid[p.id] = { available: isAvail(p, f.date), unavailText: unavailText(p, f.date) };
+    }
+    const loanMapped = lPool.map((x) => {
+      const lFat = isAdmin ? computePlayerFatigue(x.from, f).forPlayer(x.p.id) : void 0;
+      if (isAdmin && fatigueByPid && lFat) fatigueByPid[x.p.id] = lFat;
+      return {
         id: x.p.id,
         name: x.p.name,
         pos: x.p.pos,
@@ -10993,11 +11022,42 @@ app.get("/api/club", needClub, (req, res) => {
         from: x.from,
         fromName: tn(x.from),
         available: x.available,
-        busyWith: x.busyWith
-      })),
+        unavailText: x.available ? "" : unavailText(x.p, f.date),
+        busyWith: x.busyWith,
+        ...(isAdmin ? { fatigue: lFat } : {})
+      };
+    });
+    return {
+      ...pubFx(f),
+      lineup: db.lineups[f.id + ":" + req.tid] || null,
+      auto: getLineup(f, req.tid),
+      techRisk: techProblems(f, req.tid).filter((x) => x !== "\u043D\u0435 \u043F\u043E\u0434\u0430\u043D \u0441\u043E\u0441\u0442\u0430\u0432 \u043D\u0430 \u043C\u0430\u0442\u0447"),
+      loanPool: loanMapped,
+      ...(isAdmin ? { fatigueByPid } : {}),
+      availByPid,
       opp: tn(f.home === req.tid ? f.away : f.home),
       oppLogo: teamLogo(f.home === req.tid ? f.away : f.home)
+    };
+  });
+  res.json({
+    team: { ...pubTeam(t), code: isAdmin ? t.code : void 0 },
+    squadMax: db.settings.squadMax,
+    legionLimit,
+    legionSquadCount,
+    squadSubmitted: !!db.squads[req.tid],
+    staffSlots: staffSlots(req.tid),
+    staffOffers: staffOffersFor(req.tid),
+    family: sisterIdsOf(req.tid).map((id) => ({ id, name: tn(id), logo: teamLogo(id), comp: team(id)?.comp })),
+    ...(isAdmin ? { fatigueRefDate: refDate } : {}),
+    squad: sq.map((p) => ({
+      ...pubPlayer(p),
+      available: isAvail(p, refDate),
+      unavailText: unavailText(p, refDate),
+      ...(isAdmin && squadFatCalc ? { fatigue: squadFatCalc.forPlayer(p.id) } : {}),
+      card: p
     })),
+    tactic: db.tactics[req.tid] || null,
+    upcoming: upcomingWithFatigue,
     transfers: db.transfers.filter((x) => x.to === req.tid).slice(-10),
     incomingTransfers: incoming,
     outgoingTransfers: outgoing,
@@ -11686,19 +11746,44 @@ app.post("/api/club/roles", needClub, (req, res) => {
   res.json({ ok: 1, roles });
 });
 app.post("/api/club/tactics/preview", needClub, (req, res) => {
+  const isAdmin = req.me?.role === "admin";
   const coach = getCoachForTeam(req.tid);
   const staff = getStaffForTeam(req.tid);
   const fm = req.body.formation || "4-3-3";
   const starters = Array.isArray(req.body.starters) ? req.body.starters : [];
   const slotResult = starters.length ? assignFormationSlots(fm, starters, req.body.slots) : { entries: [], byPid: {} };
+  if (!isAdmin) {
+    return res.json({ ok: 1, coach, staff, slots: slotResult.entries, fatigueWarnings: [] });
+  }
   const fObj = req.body.fid ? fx(req.body.fid) : null;
   const fatCalc = computePlayerFatigue(req.tid, fObj || { date: (/* @__PURE__ */ new Date()).toISOString().slice(0, 10) });
+  const fatigueByPid: Record<string, any> = {};
+  let sumReadiness = 0, freshCount = 0, moderateCount = 0, tiredCount = 0, exhaustedCount = 0;
+  for (const pid of starters) {
+    const fi = fatCalc.forPlayer(pid);
+    fatigueByPid[pid] = fi;
+    sumReadiness += fi.readiness ?? 100;
+    if (fi.level === "exhausted") exhaustedCount++;
+    else if (fi.level === "tired") tiredCount++;
+    else if (fi.level === "moderate") moderateCount++;
+    else freshCount++;
+  }
   const fatigueWarnings = starters.map((pid: string) => {
     const p = player(pid);
-    const fi = fatCalc.forPlayer(pid);
-    return p && (fi.level === "exhausted" || fi.level === "tired") ? { pid, name: p.name, level: fi.level, label: fi.label } : null;
+    const fi = fatigueByPid[pid] || fatCalc.forPlayer(pid);
+    return p && (fi.level === "exhausted" || fi.level === "tired")
+      ? { pid, name: p.name, level: fi.level, label: fi.label, readiness: fi.readiness, shortText: fi.shortText }
+      : null;
   }).filter(Boolean);
-  res.json({ ok: 1, coach, staff, slots: slotResult.entries, fatigueWarnings });
+  const readinessSummary = {
+    total: starters.length,
+    avgReadiness: starters.length ? Math.round(sumReadiness / starters.length) : 100,
+    freshCount,
+    moderateCount,
+    tiredCount,
+    exhaustedCount
+  };
+  res.json({ ok: 1, coach, staff, slots: slotResult.entries, fatigueWarnings, fatigueByPid, readinessSummary });
 });
 app.get("/api/admin/overview", admin, (req, res) => {
   syncSecretsFromDisk();

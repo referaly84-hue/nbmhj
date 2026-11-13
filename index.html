@@ -320,6 +320,12 @@ a.fxl{color:inherit}a.fxl:hover{background:var(--soft);text-decoration:none}
 .pick{display:grid;grid-template-columns:34px 1fr 118px;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)}
 .pick select{padding:4px 6px}
 .pick.off{opacity:.5}
+.fat-ind{display:inline-flex;flex-direction:column;gap:3px;padding:3px 8px;border-radius:7px;border:1px solid;font-size:11.5px;line-height:1.25;vertical-align:middle;min-width:110px}
+.fat-ind-top{display:flex;align-items:center;justify-content:space-between;gap:6px;font-weight:700;white-space:nowrap}
+.fat-bar{height:4px;border-radius:3px;background:rgba(0,0,0,0.09);overflow:hidden;width:100%}
+.fat-bar>span{display:block;height:100%;border-radius:3px}
+.fat-ind.compact{min-width:0;padding:2px 7px;flex-direction:row;align-items:center;gap:5px}
+.fat-ind.compact .fat-bar{width:28px;height:4px;flex-shrink:0}
 .sug{position:relative}.sug .list{position:absolute;left:0;right:0;top:100%;background:#fff;border:1px solid #b9c8be;border-radius:6px;z-index:5;max-height:260px;overflow:auto;box-shadow:0 4px 12px rgba(0,0,0,0.15)}
 .sug .list div{padding:8px 10px;cursor:pointer;border-bottom:1px solid var(--line)}.sug .list div:hover{background:var(--soft)}
 .warn{background:#fff6d6;border:1px solid #e7d27a;border-radius:6px;padding:8px 12px;font-size:14px}
@@ -5083,8 +5089,33 @@ async function pgClub(app) {
         </div>
       </div>` : '';
 
+    const squadSummary = isAdmin ? c.squad.reduce((acc, p) => {
+      if (!p.available) acc.unavail++;
+      else if (p.fatigue?.level === 'exhausted') acc.exhausted++;
+      else if (p.fatigue?.level === 'tired') acc.tired++;
+      else if (p.fatigue?.level === 'moderate') acc.moderate++;
+      else acc.fresh++;
+      return acc;
+    }, { fresh: 0, moderate: 0, tired: 0, exhausted: 0, unavail: 0 }) : null;
+    const readinessBanner = isAdmin && squadSummary ? `
+      <div class="panel" style="margin-bottom:12px;padding:12px 14px">
+        <div class="row sp" style="flex-wrap:wrap;gap:8px;align-items:center">
+          <div>
+            <b style="font-size:14px">🔒 🔋 Физическая готовность и усталость состава (только админ)</b>
+            ${c.fatigueRefDate ? `<span class="muted small" style="margin-left:6px">(на ближайший матч ${fmtD(c.fatigueRefDate)})</span>` : ''}
+          </div>
+          <div class="row" style="gap:6px;flex-wrap:wrap">
+            <span class="tag" style="background:#f0fdf4;color:#15803d;border-color:#86efac;font-weight:700">🔋 Готовы: ${squadSummary.fresh + squadSummary.moderate}</span>
+            ${squadSummary.tired ? `<span class="tag" style="background:#fffbeb;color:#b45309;border-color:#fcd34d;font-weight:700">😓 Устали: ${squadSummary.tired}</span>` : ''}
+            ${squadSummary.exhausted ? `<span class="tag" style="background:#fef2f2;color:#b91c1c;border-color:#fca5a5;font-weight:700">🔥 Истощены (нужен отдых): ${squadSummary.exhausted}</span>` : ''}
+            ${squadSummary.unavail ? `<span class="tag" style="background:#fde8e6;color:#991b1b;border-color:#fca5a5;font-weight:700">🚫 Недоступны: ${squadSummary.unavail}</span>` : ''}
+          </div>
+        </div>
+      </div>` : '';
+
     cb.innerHTML = `
     ${legionBanner}
+    ${readinessBanner}
     <div class="panel">
       <div class="row sp" style="align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">
         <div>
@@ -5127,12 +5158,16 @@ async function pgClub(app) {
       </div>
     </div>
 
-    <div class="panel wrap"><table><thead><tr><th class="l">Игрок</th><th>Поз.</th><th>Возраст</th><th class="l">Гражданство / Статус</th><th class="l">Стиль</th><th class="l">Статус</th><th></th></tr></thead><tbody>${c.squad.sort((a, b) => gp[a.pos] - gp[b.pos]).map(p => {
+    <div class="panel wrap"><table><thead><tr><th class="l">Игрок</th><th>Поз.</th><th>Возраст</th><th class="l">Гражданство / Статус</th><th class="l">Стиль</th><th class="l">${isAdmin ? 'Готовность / Усталость' : 'Статус'}</th><th></th></tr></thead><tbody>${c.squad.sort((a, b) => gp[a.pos] - gp[b.pos]).map(p => {
       const leg = resolveLegionBadge(p);
       const legTag = `<span class="tag" style="${leg.tagClass === 'legion' ? 'background:#fee2e2;color:#991b1b;border-color:#fca5a5' : (leg.tagClass === 'eaeu' ? 'background:#f0fdf4;color:#166534;border-color:#bbf7d0' : 'background:#eff6ff;color:#1e40af;border-color:#bfdbfe')}" title="${e(leg.details || '')}">${e(leg.label)}</span>`;
       const clubRoles = c.tactic?.roles || {};
       const roleShort = { captain: 'К', penalty: 'Пен.', freekickNear: 'Штр.(б)', freekickFar: 'Штр.(д)', freekickRight: 'Штр.(пр)', freekickLeft: 'Штр.(л)', cornerRight: 'Угл.(пр)', cornerLeft: 'Угл.(л)' };
       const pRoleTags = Object.keys(roleShort).filter(k => clubRoles[k] === p.id).map(k => `<span class="tag" style="font-size:10px;background:#fef3c7;color:#92400e;border-color:#fcd34d;margin-left:4px">${roleShort[k]}</span>`).join('');
+      const unavailWhy = p.unavailText || (p.banLeft > 0 ? 'дисквалификация' : 'травма');
+      const statusCell = isAdmin
+        ? `${renderFatigueBadge(p.fatigue, p.available, unavailWhy, { showDetail: true })}${p.available && p.yellowCycle ? `<div class="muted small" style="margin-top:2px">ЖК: ${p.yellowCycle}/4</div>` : ''}`
+        : `${p.available ? '<span class="tag">готов</span>' : `<span class="tag" style="background:#fde8e6">${e(unavailWhy)}</span>`}${p.available && p.yellowCycle ? `<div class="muted small">ЖК: ${p.yellowCycle}/4</div>` : ''}`;
       return `<tr>
         <td class="l">
           <b>${e(p.name)}</b>${pRoleTags}
@@ -5144,7 +5179,7 @@ async function pgClub(app) {
         <td>${age(p.born)}${isBday(p.born) ? ' 🎂' : ''}</td>
         <td class="l">${legTag}<div style="margin-top:4px"><input class="nat-edit" list="nat_list" data-pid="${p.id}" value="${e(p.nation || 'Россия')}" title="Страна (гражданство) — можно изменить" style="width:150px;padding:3px 6px;font-size:12.5px;min-height:0"></div></td>
         <td class="l muted small" style="white-space:normal;max-width:320px">${e(p.style)}</td>
-        <td class="l">${p.available ? '<span class="tag">готов</span>' : `<span class="tag" style="background:#fde8e6">${e(p.unavailText || (p.banLeft > 0 ? 'дисквалификация' : 'травма'))}</span>`}${p.available && p.yellowCycle ? `<div class="muted small">ЖК: ${p.yellowCycle}/4</div>` : ''}</td>
+        <td class="l" ${isAdmin ? 'style="white-space:normal;min-width:165px"' : ''}>${statusCell}</td>
         <td><button class="btn alt sm" data-rm="${p.id}">убрать</button></td>
       </tr>`;
     }).join('') || '<tr><td colspan="7" class="empty">Заявка пуста.</td></tr>'}</tbody></table></div>
@@ -6190,13 +6225,56 @@ function clientAssignSlots(formation, starterIds, savedSlots, poolById) {
   return slotList.map((slotPos, idx) => ({ idx, slotPos, pid: assigned[idx] }));
 }
 
+function renderFatigueBadge(fat, available, unavailReason, opts = {}) {
+  const compact = !!opts.compact;
+  const showDetail = !!opts.showDetail;
+  if (available === false) {
+    const why = unavailReason || 'травма / дисквал.';
+    return `<span class="fat-ind ${compact ? 'compact' : ''}" style="background:#fef2f2;color:#b91c1c;border-color:#fca5a5" title="${e('Не готов к матчу: ' + why)}">
+      <span class="fat-ind-top"><span>🚫 ${compact ? 'Не готов' : 'Не готов играть'}</span>${compact ? '' : '<span>0%</span>'}</span>
+      <span class="fat-bar"><span style="width:0%;background:#dc2626"></span></span>
+      ${showDetail && !compact ? `<span style="font-size:10.5px;font-weight:500;opacity:.9">${e(why)}</span>` : ''}
+    </span>`;
+  }
+  const f = fat || { level: 'fresh', readiness: 100, shortText: 'Готов', label: 'свежий (начало игрового отрезка)' };
+  const pct = Math.max(0, Math.min(100, Math.round(Number(f.readiness ?? (f.level === 'exhausted' ? 40 : f.level === 'tired' ? 65 : f.level === 'moderate' ? 84 : 100)))));
+  let ico = '🔋', statusTxt = f.shortText || 'Готов', bg = '#f0fdf4', fg = '#15803d', bd = '#86efac', bar = '#16a34a', hint = 'полностью готов к матчу';
+  if (f.level === 'exhausted') {
+    ico = '🔥'; statusTxt = f.shortText || 'Истощён'; bg = '#fef2f2'; fg = '#b91c1c'; bd = '#fca5a5'; bar = '#dc2626';
+    hint = 'нужен отдых · риск просадки после 65\'';
+  } else if (f.level === 'tired') {
+    ico = '😓'; statusTxt = f.shortText || 'Устал'; bg = '#fffbeb'; fg = '#b45309'; bd = '#fcd34d'; bar = '#f59e0b';
+    hint = 'высокая нагрузка · спад во 2-м тайме';
+  } else if (f.level === 'moderate') {
+    ico = '⚡'; statusTxt = f.shortText || 'В тонусе'; bg = '#f0fdfa'; fg = '#0f766e'; bd = '#99f6e4'; bar = '#14b8a6';
+    hint = `${f.min14d || 0} мин за 14 дн. · готов играть`;
+  } else if (f.apps14d > 0 && f.starts14d === 0) {
+    hint = `свежий (${f.min14d} мин со скамейки)`;
+  }
+  const tip = f.label ? `${statusTxt} (${pct}%) — ${f.label}` : `${statusTxt} (${pct}%)`;
+  if (compact) {
+    return `<span class="fat-ind compact" style="background:${bg};color:${fg};border-color:${bd}" title="${e(tip)}">
+      <span>${ico} <b>${pct}%</b></span>
+      <span class="fat-bar"><span style="width:${pct}%;background:${bar}"></span></span>
+    </span>`;
+  }
+  return `<span class="fat-ind" style="background:${bg};color:${fg};border-color:${bd}" title="${e(tip)}">
+    <span class="fat-ind-top"><span>${ico} ${e(statusTxt)}</span><span>${pct}%</span></span>
+    <span class="fat-bar"><span style="width:${pct}%;background:${bar}"></span></span>
+    ${showDetail ? `<span style="font-size:10.5px;font-weight:500;opacity:.88;white-space:normal">${e(hint)}</span>` : ''}
+  </span>`;
+}
+
 function lineupForm(box, f, c, withT, app) {
+  const isAdmin = S.me?.role === 'admin';
   const L = f.lineup || c.tactic || f.auto;
   const st = new Set(L.starters || []), bn = new Set(L.bench || []);
   const order = { ВР: 0, ЦЗ: 1, ЛЗ: 1, ПЗ: 1, ОП: 2, ЦП: 2, АП: 2, ЛВ: 3, ПВ: 3, ЦФ: 3 };
   const sq = [...c.squad].sort((a, b) => order[a.pos] - order[b.pos]);
   const isRpl = c.team.comp === 'rpl' || f.comp === 'rpl';
   const limit = c.legionLimit || { inSquad: 12, onPitch: 7, label: '12+7' };
+  const fFatMap = isAdmin ? (f.fatigueByPid || {}) : {};
+  const fAvailMap = f.availByPid || {};
 
   // игроки дублей/молодёжки/основы своего клуба — можно взять на этот матч разово (в заявку не переходят)
   const loanPool = f.loanPool || [];
@@ -6211,10 +6289,15 @@ function lineupForm(box, f, c, withT, app) {
     const legPill = leg.tagClass === 'legion'
       ? `<span class="tag" style="background:#fee2e2;color:#991b1b;border-color:#fca5a5;font-size:10px" title="${e(leg.details || '')}">⚡ Легионер</span>` : '';
     const blocked = !p.available || !!p.busyWith;
-    const why = !p.available ? '(недоступен)' : (p.busyWith ? `(заявлен за «${e(p.busyWith)}» в этот день)` : '');
+    const why = !p.available ? (p.unavailText || 'недоступен') : (p.busyWith ? `заявлен за «${p.busyWith}» в этот день` : '');
+    const pFat = isAdmin ? (p.fatigue || fFatMap[p.id]) : null;
+    const fatBadge = isAdmin ? renderFatigueBadge(pFat, !blocked, why, { compact: false }) : '';
     return `<div class="pick ${blocked ? 'off' : ''}">
       <span class="tag">${p.pos}</span>
-      <div style="flex:1;display:flex;align-items:center;gap:6px;overflow:hidden"><span>${e(p.name)}</span>${legPill}<span class="muted small">${why}</span></div>
+      <div style="flex:1;display:flex;align-items:center;justify-content:space-between;gap:6px;flex-wrap:wrap;min-width:0">
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0"><span>${e(p.name)}</span>${legPill}${why ? `<span class="muted small">(${e(why)})</span>` : ''}</div>
+        ${fatBadge}
+      </div>
       <select data-p="${p.id}" data-loan="1" ${blocked ? 'disabled' : ''}>
         <option value="">—</option>
         <option value="s" ${loanSel.has(p.id) && (L.starters || []).includes(p.id) ? 'selected' : ''}>В старте</option>
@@ -6233,19 +6316,34 @@ function lineupForm(box, f, c, withT, app) {
 
   box.innerHTML = `<label>Схема</label><input class="fm" value="${e(L.formation || '4-3-3')}" style="max-width:140px">
   <label>Состав: выберите 11 в старт и до 9 на скамейку <span class="muted small" data-cnt></span></label>
+  ${isAdmin ? `<div class="small muted" style="margin:0 0 8px;padding:6px 10px;background:var(--soft);border:1px solid var(--line);border-radius:6px;display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+    <span><b>🔒 Индикатор готовности (только админ):</b></span>
+    <span style="color:#15803d">🔋 90–100% Готов</span>
+    <span style="color:#0f766e">⚡ 75–89% В тонусе</span>
+    <span style="color:#b45309">😓 50–74% Устал (спад во 2-м тайме)</span>
+    <span style="color:#b91c1c">🔥 &lt;50% Истощён (рекомендуется отдых)</span>
+  </div>` : ''}
   <div>${sq.map(p => {
     const leg = resolveLegionBadge(p);
     const legPill = leg.tagClass === 'legion'
       ? `<span class="tag" style="background:#fee2e2;color:#991b1b;border-color:#fca5a5;font-size:10px" title="${e(leg.details || '')}">⚡ Легионер</span>`
       : (leg.tagClass === 'eaeu' ? `<span class="tag" style="background:#f0fdf4;color:#166534;border-color:#bbf7d0;font-size:10px" title="${e(leg.details || '')}">ЕАЭС</span>` : '');
-    return `<div class="pick ${p.available ? '' : 'off'}">
+    const avInfo = fAvailMap[p.id];
+    const pAvail = avInfo ? avInfo.available : p.available;
+    const pUnavailWhy = (avInfo ? avInfo.unavailText : p.unavailText) || (p.banLeft > 0 ? 'дисквалификация' : 'травма');
+    const pFat = isAdmin ? (fFatMap[p.id] || p.fatigue) : null;
+    const fatBadge = isAdmin ? renderFatigueBadge(pFat, pAvail, pUnavailWhy, { compact: false }) : '';
+    return `<div class="pick ${pAvail ? '' : 'off'}">
       <span class="tag">${p.pos}</span>
-      <div style="flex:1;display:flex;align-items:center;gap:6px;overflow:hidden">
-        <span>${e(p.name)}</span>
-        ${legPill}
-        ${p.available ? '' : '<span class="muted small">(недоступен)</span>'}
+      <div style="flex:1;display:flex;align-items:center;justify-content:space-between;gap:6px;flex-wrap:wrap;min-width:0">
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0">
+          <span>${e(p.name)}</span>
+          ${legPill}
+          ${pAvail ? '' : `<span class="muted small">(${e(pUnavailWhy)})</span>`}
+        </div>
+        ${fatBadge}
       </div>
-      <select data-p="${p.id}" ${p.available ? '' : 'disabled'}>
+      <select data-p="${p.id}" ${pAvail ? '' : 'disabled'}>
         <option value="">—</option>
         <option value="s" ${st.has(p.id) ? 'selected' : ''}>В старте</option>
         <option value="b" ${bn.has(p.id) ? 'selected' : ''}>Скамейка</option>
@@ -6258,7 +6356,7 @@ function lineupForm(box, f, c, withT, app) {
   <label>Тактика — всё, что тренер говорит игрокам перед матчем</label><textarea class="sp1" placeholder="Пишите как есть: установка, настрой, речь. Молчание — тоже речь.">${e(L.speech || '')}</textarea>
   <label>Тренировочный план перед матчем (произвольный текст)</label><textarea class="tr1" placeholder="Например: пн — отдых, вт — прессинг 2 часа, ср — стандарты, чт — разминка, пт — отдых">${e(L.training || '')}</textarea>
   <div id="tactical_preview_widget" style="margin:14px 0;padding:12px 14px;background:rgba(255,255,255,0.04);border:1px solid var(--line);border-radius:10px;font-size:12.5px;line-height:1.45">
-    <div class="muted small">⏳ Анализ состава, позиций и усталости…</div>
+    <div class="muted small">${isAdmin ? '⏳ Анализ состава, позиций и усталости…' : '⏳ Анализ состава и позиций…'}</div>
   </div>
   <div class="row" style="margin-top:14px"><button class="btn save">Сохранить</button><span class="muted small">Состав можно менять до начала матча.</span></div>`;
 
@@ -6291,13 +6389,17 @@ function lineupForm(box, f, c, withT, app) {
       if (fit.severity === 'forced' || fit.severity === 'critical') {
         forcedList.push(`${chosenP?.name || item.pid}: ${chosenP?.pos || '?'} → ${item.slotPos}`);
       }
+      const pFat = isAdmin ? (fFatMap[item.pid] || chosenP?.fatigue) : null;
+      const pAvail = fAvailMap[item.pid] ? fAvailMap[item.pid].available : (chosenP?.available ?? true);
+      const compactFat = isAdmin ? renderFatigueBadge(pFat, pAvail, '', { compact: true }) : '';
       const opts = sPids.map(pid => {
         const sp = poolById[pid];
         return `<option value="${e(pid)}" ${pid === item.pid ? 'selected' : ''}>${e(sp?.pos || '?')} · ${e(sp?.name || pid)}</option>`;
       }).join('');
-      return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px dashed var(--line)">
+      return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px dashed var(--line);flex-wrap:wrap">
         <span class="tag" style="min-width:36px;text-align:center;font-weight:700">${e(item.slotPos)}</span>
         <select class="slot-pick" data-slot-idx="${item.idx}" data-slot-pos="${e(item.slotPos)}" style="flex:1;min-width:140px">${opts}</select>
+        ${compactFat}
         <span class="tag" style="font-size:11px;background:${fit.bg};color:${fit.color};border-color:${fit.border};white-space:nowrap">${e(fit.badge)}</span>
       </div>`;
     }).join('');
@@ -6424,6 +6526,16 @@ function lineupForm(box, f, c, withT, app) {
       const forcedSlots = slotEntries.filter(x => x.fit && (x.fit.severity === 'forced' || x.fit.severity === 'critical'));
       const minorSlots = slotEntries.filter(x => x.fit && x.fit.severity === 'minor');
       const fatWarns = Array.isArray(res.fatigueWarnings) ? res.fatigueWarnings : [];
+      const rSum = res.readinessSummary || null;
+      const avgPct = rSum ? Math.max(0, Math.min(100, Math.round(rSum.avgReadiness ?? 100))) : 100;
+      const avgColor = avgPct >= 85 ? '#16a34a' : (avgPct >= 65 ? '#f59e0b' : '#dc2626');
+      const avgVerdict = !rSum || !rSum.total
+        ? 'Выберите игроков в стартовый состав для оценки физической готовности.'
+        : (rSum.exhaustedCount > 0
+          ? `Внимание: ${rSum.exhaustedCount} игрок(а) старта истощены — высокий риск просадки после 65-й минуты, лучше дать им отдых.`
+          : (rSum.tiredCount > 0
+            ? `${rSum.tiredCount} игрок(а) старта с повышенной нагрузкой — планируйте замену во 2-м тайме.`
+            : 'Все выбранные игроки старта свежие или в отличном игровом тонусе — готовы на весь матч.'));
 
       liveBox.innerHTML = `
         ${coach ? `<div class="muted small" style="margin-bottom:6px"><b>👔 Главный тренер:</b> ${e(coach.name)} (профиль: ${e(coach.styleTitle || coach.style || 'сбалансированный')}, схема: ${e(coach.favoriteFormation || '4-3-3')})</div>` : ''}
@@ -6436,12 +6548,25 @@ function lineupForm(box, f, c, withT, app) {
               ? `<div class="small" style="color:#0369a1">ℹ️ ${minorSlots.length} смежных перестановок (${minorSlots.map(x => `${e(poolById[x.pid]?.name || '')}: ${e(x.naturalPos)}→${e(x.slotPos)}`).join(', ')}) — допустимая адаптация.</div>`
               : '<div class="small" style="color:#15803d">✅ Все 11 игроков старта выходят строго на своих родных позициях.</div>')}
         </div>` : ''}
-        <div style="margin-top:10px;padding-top:10px;border-top:1px dashed var(--line)">
-          <div style="font-weight:700;margin-bottom:4px">🔋 Персональная усталость старта</div>
+        ${isAdmin ? `<div style="margin-top:10px;padding-top:10px;border-top:1px dashed var(--line)">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px">
+            <div style="font-weight:700">🔒 🔋 Готовность и усталость старта (только админ)</div>
+            ${rSum && rSum.total ? `<span class="tag" style="font-weight:700;background:#fff;border-color:${avgColor};color:${avgColor}">Средняя готовность: ${avgPct}%</span>` : ''}
+          </div>
+          ${rSum && rSum.total ? `
+            <div class="fat-bar" style="height:6px;margin:4px 0 6px"><span style="width:${avgPct}%;background:${avgColor}"></span></div>
+            <div class="small" style="margin-bottom:6px;color:${rSum.exhaustedCount ? '#b91c1c' : (rSum.tiredCount ? '#b45309' : '#15803d')}">${e(avgVerdict)}</div>
+            <div class="row" style="gap:6px;flex-wrap:wrap;margin-bottom:${fatWarns.length ? '6px' : '0'}">
+              <span class="tag" style="font-size:11px;background:#f0fdf4;color:#15803d;border-color:#86efac">🔋 Свежие: ${rSum.freshCount}</span>
+              <span class="tag" style="font-size:11px;background:#f0fdfa;color:#0f766e;border-color:#99f6e4">⚡ В тонусе: ${rSum.moderateCount}</span>
+              ${rSum.tiredCount ? `<span class="tag" style="font-size:11px;background:#fffbeb;color:#b45309;border-color:#fcd34d">😓 Устали: ${rSum.tiredCount}</span>` : ''}
+              ${rSum.exhaustedCount ? `<span class="tag" style="font-size:11px;background:#fef2f2;color:#b91c1c;border-color:#fca5a5">🔥 Истощены: ${rSum.exhaustedCount}</span>` : ''}
+            </div>
+          ` : ''}
           ${fatWarns.length
-            ? `<div style="display:flex;flex-wrap:wrap;gap:6px">${fatWarns.map(w => `<span class="tag" style="font-size:11px;background:${w.level === 'exhausted' ? '#fee2e2' : '#fffbeb'};color:${w.level === 'exhausted' ? '#b91c1c' : '#b45309'};border-color:${w.level === 'exhausted' ? '#fca5a5' : '#fcd34d'}">${w.level === 'exhausted' ? '🔥' : '😓'} ${e(w.name)} — ${e(w.label)}</span>`).join('')}</div>`
-            : '<div class="small" style="color:#15803d">💪 Накопленной усталости у игроков стартового состава не выявлено.</div>'}
-        </div>
+            ? `<div style="display:flex;flex-wrap:wrap;gap:6px">${fatWarns.map(w => `<span class="tag" style="font-size:11px;background:${w.level === 'exhausted' ? '#fee2e2' : '#fffbeb'};color:${w.level === 'exhausted' ? '#b91c1c' : '#b45309'};border-color:${w.level === 'exhausted' ? '#fca5a5' : '#fcd34d'}">${w.level === 'exhausted' ? '🔥' : '😓'} ${e(w.name)}${w.readiness != null ? ` (${w.readiness}%)` : ''} — ${e(w.label)}</span>`).join('')}</div>`
+            : (!rSum || !rSum.total ? '<div class="small muted">Выберите игроков старта для анализа готовности.</div>' : '')}
+        </div>` : ''}
       `;
     } catch (_) {}
   };

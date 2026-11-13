@@ -228,8 +228,8 @@ test('H2H last 3 matches, position fit, personal fatigue, set-piece roles, and e
     assert.equal(lineupJson.slots.length, 11);
     assert.equal(lineupJson.roles.cornerRight, reshuffledCb.id);
 
-    // 3. Test POST /api/club/tactics/preview returns slots + fatigueWarnings
-    const prevResp = await fetch(`${baseUrl}/api/club/tactics/preview`, {
+    // 3. Test POST /api/club/tactics/preview hides fatigue for club user and returns it for admin
+    const prevClubResp = await fetch(`${baseUrl}/api/club/tactics/preview`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-code': clubCode },
       body: JSON.stringify({
@@ -241,13 +241,60 @@ test('H2H last 3 matches, position fit, personal fatigue, set-piece roles, and e
         training: 'Стандарты',
       }),
     });
-    const prevJson = (await prevResp.json()) as any;
-    assert.equal(prevJson.ok, 1);
-    assert.equal(prevJson.slots.length, 11);
-    const reshuffledPreviewSlot = prevJson.slots.find((s: any) => s.pid === reshuffledCb.id);
+    const prevClubJson = (await prevClubResp.json()) as any;
+    assert.equal(prevClubJson.ok, 1);
+    assert.equal(prevClubJson.slots.length, 11);
+    const reshuffledPreviewSlot = prevClubJson.slots.find((s: any) => s.pid === reshuffledCb.id);
     assert.equal(reshuffledPreviewSlot.slotPos, 'ЛВ');
     assert.equal(reshuffledPreviewSlot.fit.severity, 'forced');
-    assert.ok(prevJson.fatigueWarnings.some((w: any) => w.pid === tiredCb.id));
+    assert.equal(prevClubJson.fatigueWarnings.length, 0);
+    assert.equal(prevClubJson.fatigueByPid, undefined);
+    assert.equal(prevClubJson.readinessSummary, undefined);
+
+    const adminCode = process.env.ADMIN_CODE || db.settings.adminCode;
+    const prevAdminResp = await fetch(`${baseUrl}/api/club/tactics/preview`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-code': adminCode },
+      body: JSON.stringify({
+        teamId: homeTeam.id,
+        fid: targetFxId,
+        formation: '4-3-3',
+        starters: startersH,
+        slots: customSlots,
+        speech: 'Прессинг',
+        training: 'Стандарты',
+      }),
+    });
+    const prevAdminJson = (await prevAdminResp.json()) as any;
+    assert.equal(prevAdminJson.ok, 1);
+    assert.ok(prevAdminJson.fatigueWarnings.some((w: any) => w.pid === tiredCb.id));
+    assert.ok(prevAdminJson.readinessSummary && prevAdminJson.readinessSummary.total === 11);
+    assert.ok(prevAdminJson.readinessSummary.exhaustedCount >= 1);
+    assert.ok(prevAdminJson.fatigueByPid[tiredCb.id].readiness < 55);
+    assert.ok(prevAdminJson.fatigueByPid[freshMid.id].readiness >= 90);
+
+    // 3b. Test GET /api/club hides fatigue for club user and returns squad fatigue for admin
+    const clubUserResp = await fetch(`${baseUrl}/api/club`, {
+      headers: { 'x-code': clubCode },
+    });
+    const clubUserJson = (await clubUserResp.json()) as any;
+    const clubUserTired = (clubUserJson.squad || []).find((p: any) => p.id === tiredCb.id);
+    assert.ok(clubUserTired);
+    assert.equal(clubUserTired.fatigue, undefined);
+    assert.equal(clubUserJson.fatigueRefDate, undefined);
+
+    const clubAdminResp = await fetch(`${baseUrl}/api/club?teamId=${encodeURIComponent(homeTeam.id)}`, {
+      headers: { 'x-code': adminCode },
+    });
+    const clubAdminJson = (await clubAdminResp.json()) as any;
+    const clubAdminTired = (clubAdminJson.squad || []).find((p: any) => p.id === tiredCb.id);
+    assert.ok(clubAdminTired && clubAdminTired.fatigue && typeof clubAdminTired.fatigue.readiness === 'number');
+    assert.ok(clubAdminTired.fatigue.shortText);
+    const targetUpcoming = (clubAdminJson.upcoming || []).find((u: any) => u.id === targetFxId);
+    if (targetUpcoming) {
+      assert.ok(targetUpcoming.fatigueByPid?.[tiredCb.id]?.readiness < 55);
+      assert.ok(targetUpcoming.fatigueByPid?.[freshMid.id]?.readiness >= 90);
+    }
 
     // 4. Test GET /api/match/:id includes roles, roleNames, slotPos, fitSeverity
     const matchResp = await fetch(`${baseUrl}/api/match/${targetFxId}`, {
@@ -266,10 +313,14 @@ test('H2H last 3 matches, position fit, personal fatigue, set-piece roles, and e
     const tiredFat = fatCalc.forPlayer(tiredCb.id);
     assert.ok(tiredFat.level === 'exhausted' || tiredFat.level === 'tired');
     assert.ok(tiredFat.label.includes('накопленная усталость'));
+    assert.equal(tiredFat.readyToPlay, false);
+    assert.ok(tiredFat.readiness < 50);
 
     const freshFat = fatCalc.forPlayer(freshMid.id);
     assert.equal(freshFat.level, 'fresh');
     assert.ok(freshFat.label.includes('свежий, выходил только на замену'));
+    assert.equal(freshFat.readyToPlay, true);
+    assert.ok(freshFat.readiness >= 90);
 
     const savedLineup = getLineup(targetFx, homeTeam.id);
     assert.equal(savedLineup.roles.captain, tiredCb.id);
