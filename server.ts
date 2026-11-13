@@ -9706,6 +9706,332 @@ app.post("/api/presence/ping", (req, res) => {
 app.get("/api/presence/stats", (req, res) => {
   res.json({ ok: 1, ...getPresenceSummary() });
 });
+const DRAW_STUDIO_SPEAKERS = [
+  { speaker: "Роман Нагучев", role: "Ведущий МАТЧ ТВ", avatar: "🎙️" },
+  { speaker: "Андрей Тихонов", role: "Легенда Спартака и сборной", avatar: "⭐" },
+  { speaker: "Герман El Classico", role: "Президент ФК Амкал", avatar: "👑" }
+];
+
+function matchDrawSpeaker(rawName: any, idx = 0) {
+  const s = String(rawName || "").toLowerCase();
+  if (s.includes("тих") || s.includes("андрей")) return DRAW_STUDIO_SPEAKERS[1];
+  if (s.includes("герм") || s.includes("el") || s.includes("class") || s.includes("амкал")) return DRAW_STUDIO_SPEAKERS[2];
+  if (s.includes("нагуч") || s.includes("роман") || s.includes("вед")) return DRAW_STUDIO_SPEAKERS[0];
+  return DRAW_STUDIO_SPEAKERS[idx % DRAW_STUDIO_SPEAKERS.length];
+}
+
+function buildDrawTournamentBrief(tournament = "cup_rpl") {
+  const rplTeams = db.teams.filter((t) => t.comp === "rpl");
+  const mediaTeams = db.teams.filter((t) => t.comp === "media" || t.comp === "media_div2");
+  const secondTeams = db.teams.filter((t) => t.comp.startsWith("2la") || t.comp.startsWith("2lb"));
+  if (tournament === "cup_rpl") {
+    const pots = buildOfficialRplPots(rplTeams);
+    const rplTbl = typeof table === "function" ? table("rpl") : [];
+    const posMap = new Map(rplTbl.map((r, i) => [r.id, i + 1]));
+    const fmtPot = (num: number, list: any[]) => `Корзина ${num}: ` + list.map((t) => {
+      const dos = getClubDossier(t.id) || getClubDossier(t.name);
+      const coach = typeof getCoachForTeam === "function" ? getCoachForTeam(t.id)?.name : dos?.coach;
+      const pos = posMap.get(t.id);
+      const stars = dos?.stars?.slice(0, 2).join(", ");
+      return `${t.name}${t.city ? ` (${t.city})` : ""}${pos ? ` [${pos}-е место РПЛ]` : ""}${coach ? `, тренер ${coach}` : ""}${stars ? `, лидеры: ${stars}` : ""}`;
+    }).join("; ");
+    return {
+      title: "FONBET Кубок России — Путь РПЛ (групповой этап)",
+      format: "16 клубов РПЛ разделены на 4 корзины, формируют 4 группы (A, B, C, D) по 4 команды. 6 туров дома и в гостях. 1-2 места выходят в 1/8 финала Пути РПЛ (верхняя сетка), 3-е место падает в Путь регионов, 4-е вылетает.",
+      participantsText: [fmtPot(1, pots.pot1), fmtPot(2, pots.pot2), fmtPot(3, pots.pot3), fmtPot(4, pots.pot4)].join("\n")
+    };
+  }
+  if (tournament === "cup_regions") {
+    const mediaList = mediaTeams.slice(0, 10).map((t) => `${t.name}${t.city ? ` (${t.city})` : ""}`).join(", ");
+    const secList = secondTeams.slice(0, 14).map((t) => `${t.name}${t.city ? ` (${t.city})` : ""}`).join(", ");
+    return {
+      title: "FONBET Кубок России — Путь Регионов (1-й отборочный раунд)",
+      format: "Матчи на выбывание из одной игры (с серией пенальти при ничьей). Медиаклубы принимают профессиональные команды Второй лиги.",
+      participantsText: `Медиаклубы: ${mediaList}.\nКлубы Второй лиги: ${secList}.`
+    };
+  }
+  const mediaAll = mediaTeams.slice(0, 14).map((t) => `${t.name}${t.city ? ` (${t.city})` : ""}`).join(", ");
+  return {
+    title: "Winline Кубок Медиалиги (MFL)",
+    format: "12 главных медиакоманд страны делятся на 3 группы (A, B, C) по 4 команды на лучших аренах Москвы, затем плей-офф на вылет.",
+    participantsText: `Участники MFL: ${mediaAll}.`
+  };
+}
+
+function buildFallbackDrawScript(phase = "preshow", tournament = "cup_rpl", resultsSummary = "") {
+  const brief = buildDrawTournamentBrief(tournament);
+  const rplTeams = db.teams.filter((t) => t.comp === "rpl");
+  const mediaTeams = db.teams.filter((t) => t.comp === "media" || t.comp === "media_div2");
+  const secondTeams = db.teams.filter((t) => t.comp.startsWith("2la") || t.comp.startsWith("2lb"));
+  const pool = tournament === "cup_rpl" ? rplTeams : tournament === "cup_regions" ? [...mediaTeams.slice(0, 6), ...secondTeams.slice(0, 8)] : mediaTeams;
+  const clubNames = pool.map((t) => t.name).filter(Boolean);
+  const pickClub = (i: number) => clubNames[i % Math.max(1, clubNames.length)] || "Спартак";
+
+  if (phase === "postdraw") {
+    const lines: any[] = [];
+    const summaryLines = String(resultsSummary || "").replace(/<[^>]+>/g, " ").split(/\n+/).map((x) => x.trim()).filter(Boolean);
+    const topics = [
+      "Первые эмоции после финального шара",
+      "Разбор группы A и фаворитов",
+      "Интрига в группе B",
+      "Скрытые угрозы и баланс групп",
+      "Самая сложная группа смерти",
+      "Главное дерби предстоящего этапа",
+      "Шансы клубов из нижних корзин",
+      "Реакция тренеров в студии Останкино",
+      "Логистика и перелёты кубковой осени",
+      "Кто рискует оступиться в первых турах",
+      "Медийная и зрительская афиша",
+      "Роль молодёжи и глубины скамейки",
+      "Ожидания от 1-го тура",
+      "Смелый прогноз на финалистов",
+      "Прощание и передача слова календарю"
+    ];
+    for (let i = 0; i < 15; i++) {
+      const sp = DRAW_STUDIO_SPEAKERS[i % 3];
+      const snippet = summaryLines.length ? summaryLines[i % summaryLines.length].slice(0, 140) : "";
+      let text = "";
+      if (i === 0) {
+        text = `Все шары из чаши Останкино вытянуты! Жеребьёвка «${brief.title}» официально завершена, и расклады выглядят невероятно плотно.`;
+      } else if (i === 14) {
+        text = `На этом студия прощается, друзья! Передаём результаты в официальный календарь — совсем скоро команды выйдут на поле!`;
+      } else if (snippet && i <= summaryLines.length + 2) {
+        text = `Смотрим на итоговый расклад: ${snippet}. Для ${pickClub(i)} и ${pickClub(i + 3)} проходных игр здесь точно не будет — каждый балл решит судьбу путёвки в плей-офф!`;
+      } else if (i % 3 === 1) {
+        text = `Если смотреть чисто по футболу, то глубина скамейки у ${pickClub(i)} и ${pickClub(i + 2)} даст преимущество осенью, но кубковый характер творит чудеса.`;
+      } else if (i % 3 === 2) {
+        text = `Трибуны уже гудят! Афиша с участием ${pickClub(i + 1)} гарантирует аншлаг и сотни тысяч просмотров в трансляциях.`;
+      } else {
+        text = `Отдельно отметим тактическую дуэль для ${pickClub(i)} против ${pickClub(i + 4)} — здесь всё могут решить стандарты и настрой с первых минут.`;
+      }
+      lines.push({ speaker: sp.speaker, role: sp.role, avatar: sp.avatar, topic: topics[i], text });
+    }
+    return lines;
+  }
+
+  const baseWarmup = (WARMUP_DIALOGUES as any)[tournament] || WARMUP_DIALOGUES.cup_rpl;
+  const out: any[] = [];
+  const preshowTopics = [
+    "Приветствие из Останкино", "Атмосфера и регламент турнира", "Прямая трансляция и болельщики",
+    "Статус фаворитов первой корзины", "Огонь второй корзины", "Фактор тренерской мысли",
+    "Сила региональных выездов", "Дерзкие андердоги", "Моделирование группы смерти",
+    "Секрет кубкового характера", "Роль вратарей и серий пенальти", "Тактика и прессинг",
+    "Календарь и плотность игр", "Звёздные лидеры клубов", "Молодые таланты турнира",
+    "Разбор потенциальных дерби", "Домашние стадионы и аншлаги", "Цена одной ошибки",
+    "Борьба за верхнюю сетку", "Угроза вылета в Путь регионов", "Медийное напряжение в зале",
+    "Сюрпризы прошлых розыгрышей", "Ожидания тренеров перед шарами", "Интрига с составами",
+    "Лидеры атаки на старте", "Оборонительные редуты", "Стандарты как оружие в Кубке",
+    "Судейство и ВАР", "Болельщицкие прогнозы из чата", "Кому выгоднее ранний старт",
+    "География и дальние перелёты", "Психологическое давление грандов", "Шанс для сенсации",
+    "Последние приготовления у чаши", "Старт церемонии жеребьёвки!"
+  ];
+  for (let i = 0; i < 35; i++) {
+    const sp = DRAW_STUDIO_SPEAKERS[i % 3];
+    if (i < baseWarmup.length - 1) {
+      const b = baseWarmup[i];
+      out.push({
+        speaker: b.speaker || sp.speaker,
+        role: b.role || sp.role,
+        avatar: b.avatar || sp.avatar,
+        topic: b.topic || preshowTopics[i],
+        text: b.text
+      });
+      continue;
+    }
+    if (i === 34) {
+      out.push({
+        speaker: "Роман Нагучев",
+        role: "Ведущий МАТЧ ТВ",
+        avatar: "🎙️",
+        topic: "Запуск лототрона",
+        text: `Всё готово, шары в лототроне ${brief.title} перемешаны! Занимаем места у чаши — начинаем официальную жеребьёвку!`
+      });
+      continue;
+    }
+    const c1 = pickClub(i);
+    const c2 = pickClub(i + 5);
+    const c3 = pickClub(i + 9);
+    const dos = getClubDossier(c1);
+    let text = "";
+    if (i % 4 === 0 && dos) {
+      text = `Обратите внимание на ${dos.name} из города ${dos.city}: под руководством ${dos.coach} команда опирается на ${(dos.stars || []).slice(0, 2).join(" и ")}, их стиль — ${String(dos.tactics || "").toLowerCase()}`;
+    } else if (i % 4 === 1) {
+      text = `Если жребий сведёт ${c1} и ${c2} уже на этом этапе, нас ждёт настоящее футбольное зрелище. Обе команды в отличной форме и не собираются беречь лидеров.`;
+    } else if (i % 4 === 2) {
+      text = `Для ${c3} этот розыгрыш — идеальная проверка амбиций. Болельщики в чате уже спорят, с кем им выгоднее сыграть на старте ${brief.title}.`;
+    } else {
+      text = `Не стоит забывать и про фактор формата: ${brief.format.split(".")[0]}. Поэтому каждый клуб, включая ${c1} и ${c2}, настроен максимально серьёзно.`;
+    }
+    out.push({
+      speaker: sp.speaker,
+      role: sp.role,
+      avatar: sp.avatar,
+      topic: preshowTopics[i],
+      text
+    });
+  }
+  return out;
+}
+
+function normalizeDrawPhrases(rawList: any[], targetCount: number, phase: string, tournament: string, resultsSummary = "") {
+  const fallback = buildFallbackDrawScript(phase, tournament, resultsSummary);
+  const cleaned: any[] = [];
+  if (Array.isArray(rawList)) {
+    for (let i = 0; i < rawList.length; i++) {
+      const item = rawList[i];
+      if (!item || typeof item !== "object") continue;
+      const text = String(item.text || item.speech || item.line || "").trim();
+      if (!text) continue;
+      const sp = matchDrawSpeaker(item.speaker || item.name, cleaned.length);
+      const topic = String(item.topic || item.theme || (phase === "postdraw" ? "Итоги жеребьёвки" : "Обсуждение в студии")).trim().slice(0, 90);
+      cleaned.push({
+        speaker: sp.speaker,
+        role: sp.role,
+        avatar: sp.avatar,
+        topic,
+        text: text.replace(/^[«"]|[»"]$/g, "")
+      });
+    }
+  }
+  if (cleaned.length >= targetCount) {
+    return cleaned.slice(0, targetCount);
+  }
+  for (let i = cleaned.length; i < targetCount; i++) {
+    cleaned.push(fallback[i] || fallback[i % fallback.length]);
+  }
+  return cleaned;
+}
+
+async function generateDrawAiScript(opts: {
+  phase?: string;
+  tournament?: string;
+  resultsSummary?: string;
+  potsSummary?: string;
+  force?: boolean;
+} = {}) {
+  const phase = opts.phase === "postdraw" ? "postdraw" : "preshow";
+  const tournament = ["cup_rpl", "cup_regions", "media_cup"].includes(opts.tournament || "") ? opts.tournament! : "cup_rpl";
+  const targetCount = phase === "postdraw" ? 15 : 35;
+  const resultsSummary = String(opts.resultsSummary || "").trim();
+  const potsSummary = String(opts.potsSummary || "").trim();
+
+  if (!db.liveDraw) db.liveDraw = { active: false };
+  if (phase === "preshow" && !opts.force && Array.isArray(db.liveDraw.preshowScripts?.[tournament]) && db.liveDraw.preshowScripts[tournament].length === targetCount) {
+    return {
+      phrases: db.liveDraw.preshowScripts[tournament],
+      aiGenerated: !!db.liveDraw.preshowMeta?.[tournament]?.aiGenerated,
+      cached: true,
+      phase,
+      tournament,
+      count: targetCount
+    };
+  }
+  if (phase === "postdraw" && !opts.force && Array.isArray(db.liveDraw.postdrawScripts?.[tournament]) && db.liveDraw.postdrawScripts[tournament].length === targetCount && (!resultsSummary || db.liveDraw.postdrawMeta?.[tournament]?.resultsSummary === resultsSummary)) {
+    return {
+      phrases: db.liveDraw.postdrawScripts[tournament],
+      aiGenerated: !!db.liveDraw.postdrawMeta?.[tournament]?.aiGenerated,
+      cached: true,
+      phase,
+      tournament,
+      count: targetCount
+    };
+  }
+
+  const brief = buildDrawTournamentBrief(tournament);
+  let phrases: any[] | null = null;
+  let aiGenerated = false;
+  let aiError: string | null = null;
+
+  if (provList().length > 0) {
+    try {
+      const sys = `Ты — сценарист и голос прямого телеэфира студии МАТЧ ТВ в Останкино на церемонии жеребьёвки российского футбола.
+В студии работают три ярких ведущих с живым диалогом:
+1. "Роман Нагучев" — главный ведущий эфира МАТЧ ТВ (ведёт программу, задаёт темп, называет регламент, подводит к шарам).
+2. "Андрей Тихонов" — легенда Спартака и сборной (тактика, тренеры, кубковый характер, оценка групп).
+3. "Герман El Classico" — президент ФК Амкал (аудитория, хайп, медийные интриги, зрительский чат, андердоги).
+
+Верни СТРОГО валидный JSON-объект формата:
+{"phrases":[{"speaker":"Роман Нагучев","topic":"Короткий заголовок темы (3-6 слов)","text":"Живая реплика 1-3 предложения на русском языке"}]}
+Никаких пояснений вне JSON.`;
+
+      const user = phase === "preshow"
+        ? `Напиши ОДНИМ ответом полный сценарий пре-шоу перед жеребьёвкой турнира "${brief.title}" из РОВНО ${targetCount} реплик (длина массива phrases строго ${targetCount}).
+Реплики будут автоматически звучать в прямом эфире с перерывом 7 секунд одна за другой!
+
+Данные о турнире и участниках:
+Формат: ${brief.format}
+${potsSummary ? `Актуальный посев/корзины:\n${potsSummary}\n` : ""}${brief.participantsText}
+
+Структура 35 реплик:
+- Реплики 1–4: открытие прямого эфира из Останкино, приветствие болельщиков, атмосфера, объяснение формата и цены каждого раунда.
+- Реплики 5–22: подробное обсуждение участников, корзин посева, тренеров, звёздных игроков, особенностей городов и стадионов (включая андердогов и дерзких претендентов).
+- Реплики 23–31: горячий спор экспертов о потенциальной «группе смерти», главных дерби, шансах на сенсации и реакции зрительского чата.
+- Реплики 32–35: финальный разогрев перед чашей с шарами и команда ведущего запускать лототрон.
+
+Чередуй всех трёх спикеров естественно, чтобы они реагировали на слова друг друга. Каждая реплика — 1-3 сочных, естественных для ТВ-эфира предложения (без канцелярита и повторов).`
+        : `Жеребьёвка турнира "${brief.title}" только что ЗАВЕРШИЛАСЬ!
+Напиши ОДНИМ ответом живое послежеребьёвочное обсуждение итогов в студии из РОВНО ${targetCount} реплик (длина массива phrases строго ${targetCount}).
+Реплики будут автоматически звучать в эфире каждые 7 секунд.
+
+Турнир: ${brief.title} (${brief.format})
+ИТОГИ ЖЕРЕБЬЁВКИ (реальные выпавшие группы/пары — обязательно ссылайся именно на них!):
+${resultsSummary || brief.participantsText}
+
+Структура 15 реплик:
+- Реплики 1–3: первые яркие эмоции от увиденных итогов жеребьёвки.
+- Реплики 4–9: конкретный разбор каждой выпавшей группы или самых громких пар, кто кому достался, где сложилась «группа смерти», где главные дерби и выезды.
+- Реплики 10–13: кому из фаворитов повезло, кому будет тяжелее всего, где возможна главная сенсация и кто выйдет в плей-офф.
+- Реплики 14–15: финальные прогнозы от Андрея Тихонова и Германа, и красивое закрытие студийного эфира от Романа Нагучева.`;
+
+      const resp = await aiCtx.run({ ai: true, calls: 0, cap: 5 }, () =>
+        llmJSON(sys, user, {
+          json: true,
+          task: phase === "postdraw" ? "draw_postdraw_15" : "draw_preshow_35",
+          temp: 0.9,
+          max: 16e3
+        })
+      );
+      const rawArr = Array.isArray(resp?.phrases) ? resp.phrases : Array.isArray(resp) ? resp : [];
+      if (rawArr.length > 0) {
+        phrases = normalizeDrawPhrases(rawArr, targetCount, phase, tournament, resultsSummary);
+        aiGenerated = true;
+      }
+    } catch (err: any) {
+      aiError = err?.message || String(err);
+      console.warn(`[Draw AI Script ${phase}/${tournament} fallback]:`, aiError);
+    }
+  }
+
+  if (!phrases) {
+    phrases = buildFallbackDrawScript(phase, tournament, resultsSummary);
+  }
+
+  if (phase === "preshow") {
+    db.liveDraw.preshowScripts = { ...(db.liveDraw.preshowScripts || {}), [tournament]: phrases };
+    db.liveDraw.preshowMeta = { ...(db.liveDraw.preshowMeta || {}), [tournament]: { aiGenerated, generatedAt: Date.now() } };
+  } else {
+    db.liveDraw.postdrawScripts = { ...(db.liveDraw.postdrawScripts || {}), [tournament]: phrases };
+    db.liveDraw.postdrawMeta = { ...(db.liveDraw.postdrawMeta || {}), [tournament]: { aiGenerated, resultsSummary, generatedAt: Date.now() } };
+  }
+  save();
+
+  return {
+    phrases,
+    aiGenerated,
+    cached: false,
+    phase,
+    tournament,
+    count: phrases.length,
+    aiError
+  };
+}
+
+app.post("/api/draw/ai-script", async (req, res) => {
+  const { phase = "preshow", tournament = "cup_rpl", force = false, resultsSummary = "", potsSummary = "" } = req.body || {};
+  const result = await generateDrawAiScript({ phase, tournament, force: !!force, resultsSummary, potsSummary });
+  res.json({ ok: 1, ...result });
+});
+
 app.get("/api/draw/data", (req, res) => {
   if (!db.cupState2026) advanceCup();
   const rplTeams = db.teams.filter((t) => t.comp === "rpl");
@@ -9741,6 +10067,9 @@ app.get("/api/draw/data", (req, res) => {
     peakViewers: presence.peakViewers,
     totalOnline: presence.totalOnline,
     warmupDialogues: WARMUP_DIALOGUES,
+    preshowScripts: db.liveDraw?.preshowScripts || {},
+    postdrawScripts: db.liveDraw?.postdrawScripts || {},
+    aiEnabled: provList().length > 0,
     rplDossiers: RPL_CLUB_DOSSIERS,
     isAdmin: req.me?.role === "admin"
   });
@@ -9756,6 +10085,10 @@ app.post("/api/admin/draw/start", admin, (req, res) => {
     step: 0,
     warmupStep: 0,
     history: [],
+    preshowScripts: {},
+    postdrawScripts: {},
+    preshowMeta: {},
+    postdrawMeta: {},
     viewers
   };
   try {
@@ -9774,14 +10107,14 @@ app.post("/api/admin/draw/start", admin, (req, res) => {
   try {
     tg(`\u{1F534} <b>\u041F\u0420\u042F\u041C\u041E\u0419 \u042D\u0424\u0418\u0420: \u0416\u0415\u0420\u0415\u0411\u042C\u0401\u0412\u041A\u0410 ${tTitle.toUpperCase()} \u041D\u0410\u0427\u0410\u041B\u0410\u0421\u042C!</b>
 
-\u{1F399} \u041C\u044B \u0432\u044B\u0445\u043E\u0434\u0438\u043C \u0432 \u043F\u0440\u044F\u043C\u043E\u0439 \u0422\u0412-\u044D\u0444\u0438\u0440 \u0438\u0437 \u0441\u0442\u0443\u0434\u0438\u0438 \u0432 \u041E\u0441\u0442\u0430\u043D\u043A\u0438\u043D\u043E! \u0412\u0435\u0434\u0443\u0449\u0438\u0439 \u0420\u043E\u043C\u0430\u043D \u041D\u0430\u0433\u0443\u0447\u0435\u0432 \u0438 \u044D\u043A\u0441\u043F\u0435\u0440\u0442\u044B \u0441\u0442\u0443\u0434\u0438\u0438 \u043D\u0430\u0447\u0438\u043D\u0430\u044E\u0442 \u0440\u0430\u0441\u0448\u0438\u0440\u0435\u043D\u043D\u043E\u0435 \u043F\u0440\u0435-\u0448\u043E\u0443, \u0434\u0435\u0442\u0430\u043B\u044C\u043D\u044B\u0439 \u0440\u0430\u0437\u0431\u043E\u0440 \u0432\u0441\u0435\u0445 16 \u043A\u043B\u0443\u0431\u043E\u0432 \u0420\u041F\u041B \u0438 \u0438\u043D\u0442\u0440\u0438\u0433 \u0442\u0443\u0440\u043D\u0438\u0440\u0430 \u043F\u0435\u0440\u0435\u0434 \u043E\u0442\u043A\u0440\u044B\u0442\u0438\u0435\u043C \u043B\u043E\u0442\u043E\u0442\u0440\u043E\u043D\u0430.
+\u{1F399} \u041C\u044B \u0432\u044B\u0445\u043E\u0434\u0438\u043C \u0432 \u043F\u0440\u044F\u043C\u043E\u0439 \u0422\u0412-\u044D\u0444\u0438\u0440 \u0438\u0437 \u0441\u0442\u0443\u0434\u0438\u0438 \u0432 \u041E\u0441\u0442\u0430\u043D\u043A\u0438\u043D\u043E! \u0412\u0435\u0434\u0443\u0449\u0438\u0439 \u0420\u043E\u043C\u0430\u043D \u041D\u0430\u0433\u0443\u0447\u0435\u0432 \u0438 \u044D\u043A\u0441\u043F\u0435\u0440\u0442\u044B \u0441\u0442\u0443\u0434\u0438\u0438 \u043D\u0430\u0447\u0438\u043D\u0430\u044E\u0442 \u0418\u0418-\u043F\u0440\u0435-\u0448\u043E\u0443 (35 \u0440\u0435\u043F\u043B\u0438\u043A \u043A\u0430\u0436\u0434\u044B\u0435 7 \u0441\u0435\u043A\u0443\u043D\u0434) \u0438 \u0434\u0435\u0442\u0430\u043B\u044C\u043D\u044B\u0439 \u0440\u0430\u0437\u0431\u043E\u0440 \u043A\u043B\u0443\u0431\u043E\u0432 \u043F\u0435\u0440\u0435\u0434 \u043E\u0442\u043A\u0440\u044B\u0442\u0438\u0435\u043C \u043B\u043E\u0442\u043E\u0442\u0440\u043E\u043D\u0430.
 
 \u{1F4FA} <b>\u041F\u0440\u0438\u0441\u043E\u0435\u0434\u0438\u043D\u044F\u0439\u0442\u0435\u0441\u044C \u043A \u043F\u0440\u044F\u043C\u043E\u0439 \u0442\u0440\u0430\u043D\u0441\u043B\u044F\u0446\u0438\u0438:</b>
 ${appUrl}/#/draw`);
   } catch (err) {
     console.error("[Telegram Send Error]:", err);
   }
-  res.json({ ok: 1, liveDraw: db.liveDraw, viewers });
+  res.json({ ok: 1, liveDraw: db.liveDraw, viewers, aiEnabled: provList().length > 0 });
 });
 app.post("/api/draw/ai-chat", async (req, res) => {
   const { question, speaker = "\u0420\u043E\u043C\u0430\u043D \u041D\u0430\u0433\u0443\u0447\u0435\u0432", teamId = "" } = req.body || {};
@@ -10337,20 +10670,29 @@ app.post("/api/draw/commentary", async (req, res) => {
     assignedGroup: assignedGroup || "",
     rivalsInSlot
   });
-  if (hasLLM()) {
+  if (provList().length > 0) {
     try {
-      const rivalsText = rivalsInSlot.length ? `\u0423\u0436\u0435 \u0432 \u044D\u0442\u043E\u0439 \u0433\u0440\u0443\u043F\u043F\u0435: ${rivalsInSlot.map((r) => r.name).join(", ")}.` : "\u041F\u0435\u0440\u0432\u0430\u044F \u043A\u043E\u043C\u0430\u043D\u0434\u0430 \u0432 \u044D\u0442\u043E\u0439 \u043A\u043E\u0440\u0437\u0438\u043D\u0435/\u0433\u0440\u0443\u043F\u043F\u0435.";
-      const prompt = `\u0422\u044B \u2014 \u0432\u0435\u0434\u0443\u0449\u0438\u0439 \u043F\u0440\u044F\u043C\u043E\u0433\u043E \u044D\u0444\u0438\u0440\u0430 \u0442\u043E\u0440\u0436\u0435\u0441\u0442\u0432\u0435\u043D\u043D\u043E\u0439 \u0436\u0435\u0440\u0435\u0431\u044C\u0435\u0432\u043A\u0438 ${tournament === "media_cup" ? "\u041A\u0443\u0431\u043A\u0430 \u041C\u0435\u0434\u0438\u0430\u043B\u0438\u0433\u0438" : "\u041A\u0443\u0431\u043A\u0430 \u0420\u043E\u0441\u0441\u0438\u0438"} \u043D\u0430 \u041C\u0430\u0442\u0447 \u0422\u0412 (\u0432 \u0441\u0442\u0438\u043B\u0435 \u0420\u043E\u043C\u0430\u043D\u0430 \u041D\u0430\u0433\u0443\u0447\u0435\u0432\u0430, \u0414\u0435\u043D\u0438\u0441\u0430 \u041A\u0430\u0437\u0430\u043D\u0441\u043A\u043E\u0433\u043E \u0438\u043B\u0438 \u0432\u0435\u0434\u0443\u0449\u0438\u0445 \u041C\u0435\u0434\u0438\u0430\u043B\u0438\u0433\u0438).
-\u0422\u043E\u043B\u044C\u043A\u043E \u0447\u0442\u043E \u0434\u043E\u0441\u0442\u0430\u043B\u0438 \u0448\u0430\u0440: ${teamObj.name}. \u041E\u043D \u043E\u0442\u043F\u0440\u0430\u0432\u043B\u044F\u0435\u0442\u0441\u044F \u0432: ${targetSlot} (\u0413\u0440\u0443\u043F\u043F\u0430 ${assignedGroup || ""}).
+      const rivalsText = rivalsInSlot.length ? `Уже в этой группе/паре: ${rivalsInSlot.map((r: any) => r.name).join(", ")}.` : "Первая команда в этой корзине/группе.";
+      const sys = "Ты — режиссёр прямого эфира жеребьёвки на МАТЧ ТВ (Роман Нагучев + эксперт в студии Андрей Тихонов или Герман El Classico). Верни СТРОГО JSON.";
+      const prompt = `Турнир: ${tournament === "media_cup" ? "Winline Кубок Медиалиги" : tournament === "cup_regions" ? "FONBET Кубок России (Путь Регионов)" : "FONBET Кубок России (Путь РПЛ)"}.
+Только что вытянули шар #${step || 1}: ${teamObj.name} (${teamObj.city || "Россия"}).
+Отправляется в слот: ${targetSlot} (Группа ${assignedGroup || ""}).
 ${rivalsText}
-\u041D\u0430\u043F\u0438\u0448\u0438 1-2 \u0441\u043E\u0447\u043D\u044B\u0435, \u044D\u043C\u043E\u0446\u0438\u043E\u043D\u0430\u043B\u044C\u043D\u044B\u0435 \u0444\u0440\u0430\u0437\u044B \u043A\u043E\u043C\u043C\u0435\u043D\u0442\u0430\u0440\u0438\u044F \u0434\u043B\u044F \u044D\u0444\u0438\u0440\u0430 (\u0441 \u0444\u0443\u0442\u0431\u043E\u043B\u044C\u043D\u044B\u043C \u0438\u043B\u0438 \u043C\u0435\u0434\u0438\u0430\u0444\u0443\u0442\u0431\u043E\u043B\u044C\u043D\u044B\u043C \u0441\u043B\u0435\u043D\u0433\u043E\u043C, \u0438\u043D\u0442\u0440\u0438\u0433\u043E\u0439, \u0443\u043F\u043E\u043C\u0438\u043D\u0430\u043D\u0438\u0435\u043C \u0434\u0435\u0440\u0431\u0438 \u0438\u043B\u0438 \u0445\u0430\u0440\u0430\u043A\u0442\u0435\u0440\u0430 \u043A\u043E\u043C\u0430\u043D\u0434\u044B).
-\u0424\u043E\u0440\u043C\u0430\u0442: \u0441\u0442\u0440\u043E\u0433\u043E \u043E\u0434\u043D\u0430-\u0434\u0432\u0435 \u0444\u0440\u0430\u0437\u044B. \u0411\u0435\u0437 \u043A\u0430\u0432\u044B\u0447\u0435\u043A.`;
-      const aiReply = await llm("\u0422\u044B \u2014 \u044F\u0440\u043A\u0438\u0439 \u043A\u043E\u043C\u043C\u0435\u043D\u0442\u0430\u0442\u043E\u0440 \u043F\u0440\u044F\u043C\u043E\u0433\u043E \u044D\u0444\u0438\u0440\u0430 \u0436\u0435\u0440\u0435\u0431\u044C\u0435\u0432\u043A\u0438.", prompt, { json: false, max: 200, temp: 0.85 });
-      if (aiReply && aiReply.trim()) {
+
+Напиши короткую, сочную реакцию студии в прямом эфире.
+Верни JSON строго формата:
+{"commentator":"1-2 ярких предложения от Романа Нагучева про этот шар и расклад (без кавычек)","guest":"1 живая реплика-реакция от Андрея Тихонова или Германа El Classico в «кавычках»","dramaLevel":"normal или derby"}`;
+      const aiReply = await aiCtx.run({ ai: true, calls: 0, cap: 5 }, () =>
+        llmJSON(sys, prompt, { json: true, task: "draw_ball_commentary", max: 600, temp: 0.85 })
+      );
+      const comm = String(aiReply?.commentator || "").trim().replace(/^[«"]|[»"]$/g, "");
+      const gst = String(aiReply?.guest || "").trim();
+      if (comm) {
         return res.json({
-          commentator: aiReply.trim(),
-          guest: preset.guest,
-          dramaLevel: preset.dramaLevel
+          commentator: comm,
+          guest: gst ? (gst.startsWith("«") ? gst : `«${gst.replace(/^[«"]|[»"]$/g, "")}»`) : preset.guest,
+          dramaLevel: aiReply?.dramaLevel === "derby" ? "derby" : preset.dramaLevel,
+          aiGenerated: true
         });
       }
     } catch (e) {
@@ -15217,6 +15559,8 @@ export {
   app,
   assignFormationSlots,
   buildCtx,
+  buildDrawTournamentBrief,
+  buildFallbackDrawScript,
   buildUser,
   cardLine,
   computePlayerFatigue,
@@ -15229,6 +15573,7 @@ export {
   fatText,
   fixLineup,
   formationSlots,
+  generateDrawAiScript,
   getAvailableSeasons,
   getCupWinnerForSeason,
   getLineup,

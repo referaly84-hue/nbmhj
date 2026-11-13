@@ -9845,14 +9845,27 @@ async function pgWeather(app) {
 let DRAW_CTX = {
   tourn: 'cup_rpl', // 'cup_rpl' | 'cup_regions' | 'media_cup'
   mediaMode: 'groups', // 'groups' | 'playoff'
+  stage: 'warmup', // 'warmup' | 'draw' | 'postdraw'
   data: null,
   step: 0,
   maxSteps: 16,
+  warmupStep: 0,
+  warmupAuto: true,
+  postdrawStep: 0,
+  postdrawAuto: false,
   auto: false,
-  speed: 1, // 1: 3500ms, 2: 1800ms, 4: 600ms
+  speed: 1, // 1: 3800ms, 2: 2200ms, 4: 800ms
+  INTERVAL_MS: 7000, // 7 секунд между репликами студии
   timer: null,
   warmupTimer: null,
+  postdrawTimer: null,
   viewersTicker: null,
+  preshowScripts: {},
+  postdrawScripts: {},
+  preshowLoading: {},
+  postdrawLoading: {},
+  preshowAiMeta: {},
+  postdrawAiMeta: {},
   sound: true,
   voice: true,
   revealing: false,
@@ -10044,7 +10057,7 @@ function speakCommentator(text) {
   if (!DRAW_CTX.voice || !window.speechSynthesis) return;
   try {
     window.speechSynthesis.cancel();
-    const clean = String(text || '').replace(/«|»|"/g, '').slice(0, 140);
+    const clean = String(text || '').replace(/«|»|"/g, '').slice(0, 260);
     const ut = new SpeechSynthesisUtterance(clean);
     ut.lang = 'ru-RU';
     ut.rate = 1.05;
@@ -10210,17 +10223,55 @@ const FALLBACK_WARMUPS = {
   ]
 };
 
+// Форматирование текущих корзин посева для ИИ-сценария
+function formatDrawPotsBrief(tourn) {
+  const p = DRAW_CTX.pots || {};
+  const lines = [];
+  if (tourn === 'cup_regions') {
+    if (p.pot1?.length) lines.push(`Медиаклубы (хозяева): ${p.pot1.map(t => t.name).join(', ')}`);
+    if (p.pot2?.length) lines.push(`Вторая лига (гости): ${p.pot2.map(t => t.name).join(', ')}`);
+  } else {
+    ['pot1', 'pot2', 'pot3', 'pot4'].forEach((k, idx) => {
+      if (p[k]?.length) lines.push(`Корзина ${idx + 1}: ${p[k].map(t => t.name).join(', ')}`);
+    });
+  }
+  return lines.join('\n');
+}
+
+// Форматирование итоговых групп / пар для послежеребьёвочного обсуждения ИИ
+function formatDrawResultsSummary(tourn) {
+  if (tourn === 'cup_rpl') {
+    return ['A', 'B', 'C', 'D'].map(g => {
+      const list = DRAW_CTX.groups?.[g] || [];
+      return `Группа ${g}: ${list.length ? list.map(t => t.name).join(', ') : 'пока не заполнена'}`;
+    }).join('\n');
+  }
+  if (tourn === 'cup_regions') {
+    return (DRAW_CTX.regionsPairs || []).map((pair, idx) =>
+      `Пара ${idx + 1}: ${pair?.[0]?.name || '?'} — ${pair?.[1]?.name || '?'}`
+    ).join('\n');
+  }
+  return ['A', 'B', 'C'].map(g => {
+    const list = DRAW_CTX.mediaGroups?.[g] || [];
+    return `Группа ${g}: ${list.length ? list.map(t => t.name).join(', ') : 'пока не заполнена'}`;
+  }).join('\n');
+}
+
 // Инициализация турнира для жеребьевки
 function initDrawTournament(type) {
   DRAW_CTX.tourn = type;
   DRAW_CTX.step = 0;
   DRAW_CTX.warmupStep = 0;
+  DRAW_CTX.postdrawStep = 0;
   DRAW_CTX.stage = 'warmup'; // Сначала пре-шоу и разогрев!
   DRAW_CTX.history = [];
   DRAW_CTX.currentBall = null;
   if (DRAW_CTX.timer) { clearInterval(DRAW_CTX.timer); DRAW_CTX.timer = null; }
   if (DRAW_CTX.warmupTimer) { clearInterval(DRAW_CTX.warmupTimer); DRAW_CTX.warmupTimer = null; }
+  if (DRAW_CTX.postdrawTimer) { clearInterval(DRAW_CTX.postdrawTimer); DRAW_CTX.postdrawTimer = null; }
   DRAW_CTX.auto = false;
+  DRAW_CTX.warmupAuto = true;
+  DRAW_CTX.postdrawAuto = false;
   DRAW_CTX.viewers = Math.max(1, DRAW_CTX.data?.viewers || 1);
   DRAW_CTX.peakViewers = Math.max(DRAW_CTX.viewers, DRAW_CTX.data?.peakViewers || 1);
   DRAW_CTX.totalOnline = Math.max(DRAW_CTX.viewers, DRAW_CTX.data?.totalOnline || 1);
@@ -10228,6 +10279,13 @@ function initDrawTournament(type) {
 
   const d = DRAW_CTX.data;
   if (!d) return;
+
+  if (d.preshowScripts && typeof d.preshowScripts === 'object') {
+    DRAW_CTX.preshowScripts = { ...d.preshowScripts, ...DRAW_CTX.preshowScripts };
+  }
+  if (d.postdrawScripts && typeof d.postdrawScripts === 'object') {
+    DRAW_CTX.postdrawScripts = { ...d.postdrawScripts, ...DRAW_CTX.postdrawScripts };
+  }
 
   if (type === 'cup_rpl') {
     DRAW_CTX.maxSteps = 16;
@@ -10262,15 +10320,106 @@ function initDrawTournament(type) {
     DRAW_CTX.mediaGroups = { A: [], B: [], C: [] };
     DRAW_CTX.mediaPairs = [];
   }
+
+  // Запускаем генерацию 35 фраз пре-шоу одним промптом ИИ
+  loadDrawAiScript('preshow', type, false);
 }
 
-// Получение диалогов текущего турнира
+// Загрузка сценария студии (35 фраз до жеребьёвки / 15 фраз после) одним ИИ-запросом
+async function loadDrawAiScript(phase, tourn, force = false) {
+  const isPost = phase === 'postdraw';
+  const targetTourn = tourn || DRAW_CTX.tourn || 'cup_rpl';
+  const expectedCount = isPost ? 15 : 35;
+  const loadingMap = isPost ? DRAW_CTX.postdrawLoading : DRAW_CTX.preshowLoading;
+  const scriptMap = isPost ? DRAW_CTX.postdrawScripts : DRAW_CTX.preshowScripts;
+  const metaMap = isPost ? DRAW_CTX.postdrawAiMeta : DRAW_CTX.preshowAiMeta;
+
+  if (!force && Array.isArray(scriptMap[targetTourn]) && scriptMap[targetTourn].length === expectedCount) {
+    return scriptMap[targetTourn];
+  }
+  if (loadingMap[targetTourn] && !force) return null;
+
+  loadingMap[targetTourn] = true;
+  const appEl = $('#app');
+  if (appEl && location.hash.startsWith('#/draw') && DRAW_CTX.tourn === targetTourn) {
+    if ((!isPost && DRAW_CTX.stage === 'warmup') || (isPost && DRAW_CTX.stage === 'postdraw')) {
+      renderDrawPage(appEl);
+    }
+  }
+
+  try {
+    const res = await api('/draw/ai-script', {
+      phase,
+      tournament: targetTourn,
+      force: !!force,
+      potsSummary: !isPost ? formatDrawPotsBrief(targetTourn) : '',
+      resultsSummary: isPost ? formatDrawResultsSummary(targetTourn) : ''
+    });
+    if (res && Array.isArray(res.phrases) && res.phrases.length) {
+      scriptMap[targetTourn] = res.phrases;
+      metaMap[targetTourn] = { aiGenerated: !!res.aiGenerated, cached: !!res.cached };
+      if (DRAW_CTX.data) {
+        if (isPost) DRAW_CTX.data.postdrawScripts = { ...(DRAW_CTX.data.postdrawScripts || {}), [targetTourn]: res.phrases };
+        else DRAW_CTX.data.preshowScripts = { ...(DRAW_CTX.data.preshowScripts || {}), [targetTourn]: res.phrases };
+      }
+      if (force) {
+        if (isPost) DRAW_CTX.postdrawStep = 0;
+        else DRAW_CTX.warmupStep = 0;
+        toast(res.aiGenerated
+          ? `✨ Сгенерировано ${res.phrases.length} ИИ-реплик для студии!`
+          : `🎙️ Подготовлено ${res.phrases.length} реплик эфира!`);
+      }
+    }
+  } catch (err) {
+    console.warn('loadDrawAiScript error:', err);
+  } finally {
+    loadingMap[targetTourn] = false;
+    const curApp = $('#app');
+    if (curApp && location.hash.startsWith('#/draw') && DRAW_CTX.tourn === targetTourn) {
+      if (!isPost && DRAW_CTX.stage === 'warmup') {
+        const list = getTournamentDialogues(targetTourn);
+        if (DRAW_CTX.warmupStep === 0 && list[0]) speakCommentator(list[0].text);
+        if (DRAW_CTX.warmupAuto) startWarmupAuto(curApp, list);
+        renderDrawPage(curApp);
+      } else if (isPost && DRAW_CTX.stage === 'postdraw') {
+        const list = getPostdrawDialogues(targetTourn);
+        if (DRAW_CTX.postdrawStep === 0 && list[0]) speakCommentator(list[0].text);
+        if (DRAW_CTX.postdrawAuto) startPostdrawAuto(curApp, list);
+        renderDrawPage(curApp);
+      }
+    }
+  }
+  return scriptMap[targetTourn] || null;
+}
+
+// Получение диалогов текущего турнира (приоритет — ИИ-сценарий на 35 реплик)
 function getTournamentDialogues(tourn) {
+  const aiList = DRAW_CTX.preshowScripts?.[tourn] || DRAW_CTX.data?.preshowScripts?.[tourn];
+  if (Array.isArray(aiList) && aiList.length) {
+    return aiList;
+  }
   const custom = DRAW_CTX.data?.warmupDialogues;
   if (custom && custom[tourn] && custom[tourn].length) {
     return custom[tourn];
   }
   return FALLBACK_WARMUPS[tourn] || FALLBACK_WARMUPS.cup_rpl;
+}
+
+// Получение 15 реплик послежеребьёвочного обсуждения
+function getPostdrawDialogues(tourn) {
+  const aiList = DRAW_CTX.postdrawScripts?.[tourn] || DRAW_CTX.data?.postdrawScripts?.[tourn];
+  if (Array.isArray(aiList) && aiList.length) {
+    return aiList;
+  }
+  return [
+    {
+      speaker: 'Роман Нагучев',
+      role: 'Ведущий прямого эфира МАТЧ ТВ',
+      avatar: '🎙️',
+      topic: 'Итоги жеребьёвки',
+      text: 'Все шары из чаши Останкино вытянуты! Эксперты уже изучают итоговые группы и пары — начинаем разбор раскладов!'
+    }
+  ];
 }
 
 // Основная страница жеребьевки
@@ -10287,6 +10436,12 @@ async function pgDraw(app, sub) {
       if (DRAW_CTX.data.liveDraw) {
         if (!S.st) S.st = {};
         S.st.liveDraw = DRAW_CTX.data.liveDraw;
+      }
+      if (DRAW_CTX.data.preshowScripts) {
+        DRAW_CTX.preshowScripts = { ...DRAW_CTX.data.preshowScripts, ...DRAW_CTX.preshowScripts };
+      }
+      if (DRAW_CTX.data.postdrawScripts) {
+        DRAW_CTX.postdrawScripts = { ...DRAW_CTX.data.postdrawScripts, ...DRAW_CTX.postdrawScripts };
       }
     } catch (e) {
       app.innerHTML = `<div class="panel warn">Ошибка загрузки студии: ${e.message}</div>`;
@@ -10526,10 +10681,12 @@ function renderAdminDrawLaunch(app) {
   }
 }
 
-// Рендер страницы жеребьевки: развилка между Пре-шоу (разогрев) и Лототроном
+// Рендер страницы жеребьевки: развилка между Пре-шоу (35 фраз), Лототроном и Обсуждением итогов (15 фраз)
 function renderDrawPage(app) {
   if (DRAW_CTX.stage === 'warmup') {
     renderDrawWarmupStudio(app);
+  } else if (DRAW_CTX.stage === 'postdraw') {
+    renderDrawPostStudio(app);
   } else {
     renderDrawLotteryStage(app);
   }
@@ -10641,6 +10798,19 @@ function renderDrawWarmupStudio(app) {
           }).join('')}
         </div>
 
+        <!-- Статус ИИ-сценария 35 фраз -->
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:10px;padding:8px 12px;border-radius:10px;background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.25)">
+          <div style="font-size:12px;color:#cbd5e1;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            ${DRAW_CTX.preshowLoading?.[DRAW_CTX.tourn]
+              ? '<span style="color:#facc15;font-weight:700">⏳ Gemini AI пишет сценарий пре-шоу из 35 реплик для этого турнира…</span>'
+              : `<span style="color:#4ade80;font-weight:700">🤖 ${DRAW_CTX.preshowAiMeta?.[DRAW_CTX.tourn]?.aiGenerated === false ? 'Эфирный сценарий студии' : 'Gemini AI сценарий'}: ${dialogues.length} реплик · пауза 7 сек</span>`
+            }
+          </div>
+          <button class="draw-btn-secondary" id="btn_regen_preshow" style="padding:4px 10px;font-size:11px" ${DRAW_CTX.preshowLoading?.[DRAW_CTX.tourn] ? 'disabled' : ''}>
+            ✨ Сгенерировать заново (ИИ)
+          </button>
+        </div>
+
         <!-- Центральная реплика прямого эфира -->
         <div class="draw-warmup-speech-hero">
           <div class="draw-warmup-topic-tag">
@@ -10661,8 +10831,8 @@ function renderDrawWarmupStudio(app) {
         <!-- Хроника реплик в студии -->
         <div>
           <div style="font-family:Unbounded,sans-serif;font-size:11px;font-weight:800;color:#94a3b8;margin-bottom:8px;text-transform:uppercase;display:flex;align-items:center;justify-content:space-between">
-            <span>Диалог студии МАТЧ ТВ (Реплика ${curIdx + 1} из ${dialogues.length})</span>
-            <span style="color:#38bdf8">✈️ Отправляется в Telegram</span>
+            <span>Диалог студии МАТЧ ТВ (Реплика ${curIdx + 1} из ${dialogues.length} · 7 сек)</span>
+            <span style="color:${DRAW_CTX.warmupAuto ? '#4ade80' : '#94a3b8'}">${DRAW_CTX.warmupAuto ? '● АВТО-ЭФИР (7с)' : '⏸ ПАУЗА'}</span>
           </div>
           <div class="draw-warmup-feed" id="warmup_feed">
             ${dialogues.slice(0, curIdx + 1).map((dItem, idx) => `
@@ -10739,7 +10909,7 @@ function renderDrawWarmupStudio(app) {
       </button>
 
       <button class="draw-btn-auto" id="btn_toggle_warmup_auto">
-        ${DRAW_CTX.warmupAuto ? '⏸ Приостановить авто-разогрев' : '▶ Авто-разогрев студии'}
+        ${DRAW_CTX.warmupAuto ? '⏸ Приостановить (7 сек)' : '▶ Авто-разогрев (7 сек)'}
       </button>
 
       <button class="draw-btn-apply" id="btn_start_lottery_bowl" style="background:linear-gradient(135deg,#f0c419,#eab308);color:#0d2f21">
@@ -10757,6 +10927,9 @@ function renderDrawWarmupStudio(app) {
   `;
 
   attachWarmupEvents(app, dialogues);
+  if (DRAW_CTX.warmupAuto && !DRAW_CTX.warmupTimer && !DRAW_CTX.preshowLoading?.[DRAW_CTX.tourn]) {
+    startWarmupAuto(app, dialogues);
+  }
 }
 
 // Рендер корзин посева во время разогрева
@@ -11003,6 +11176,17 @@ function attachWarmupEvents(app, dialogues) {
     };
   }
 
+  // Перегенерация 35 фраз ИИ
+  const btnRegen = $('#btn_regen_preshow');
+  if (btnRegen) {
+    btnRegen.onclick = () => {
+      if (DRAW_CTX.warmupTimer) { clearInterval(DRAW_CTX.warmupTimer); DRAW_CTX.warmupTimer = null; }
+      DRAW_CTX.warmupStep = 0;
+      DRAW_CTX.warmupAuto = true;
+      loadDrawAiScript('preshow', DRAW_CTX.tourn, true);
+    };
+  }
+
   // Реакции зрителей
   app.querySelectorAll('[data-emo]').forEach(btn => {
     btn.onclick = () => {
@@ -11018,6 +11202,10 @@ function attachWarmupEvents(app, dialogues) {
 
   // ИИ и карточки команд
   attachAiChatEvents(app);
+
+  // Автопрокрутка ленты реплик вниз к активной фразе
+  const wf = $('#warmup_feed');
+  if (wf) wf.scrollTop = wf.scrollHeight;
 }
 
 // Продвижение диалога разогрева
@@ -11037,36 +11225,23 @@ function advanceWarmupStep(app, isAuto) {
 
   const curItem = dialogues[DRAW_CTX.warmupStep];
   if (curItem) {
-    // Озвучка комментатора
     speakCommentator(curItem.text);
-    // Отправка текстового события в Telegram
-    api('/draw/tg-event', {
-      type: 'warmup',
-      payload: { speaker: curItem.speaker, role: curItem.role, text: curItem.text }
-    }).then(res => {
-      if (res && res.post) {
-        DRAW_CTX.lastTgPost = res.post;
-        updateDrawTgStatus(res.post);
-        if (!S.st) S.st = {};
-        S.st.insidersCount = (S.st.insidersCount || 0) + 1;
-        drawChrome();
-      }
-      if (res && res.viewers) {
-        DRAW_CTX.viewers = Math.max(DRAW_CTX.viewers, res.viewers);
-        DRAW_CTX.peakViewers = Math.max(DRAW_CTX.peakViewers, DRAW_CTX.viewers);
-        updateDrawViewersDisplay();
-      }
-    }).catch(() => {});
   }
 
   renderDrawWarmupStudio(app);
 }
 
-// Автоматический цикл разогрева
+// Автоматический цикл разогрева (строго раз в 7 секунд)
 function startWarmupAuto(app, dialogues) {
   if (DRAW_CTX.warmupTimer) clearInterval(DRAW_CTX.warmupTimer);
   DRAW_CTX.warmupTimer = setInterval(() => {
-    if (DRAW_CTX.warmupStep >= dialogues.length - 1) {
+    const liveList = getTournamentDialogues(DRAW_CTX.tourn);
+    if (!location.hash.startsWith('#/draw') || DRAW_CTX.stage !== 'warmup') {
+      clearInterval(DRAW_CTX.warmupTimer);
+      DRAW_CTX.warmupTimer = null;
+      return;
+    }
+    if (DRAW_CTX.warmupStep >= liveList.length - 1) {
       clearInterval(DRAW_CTX.warmupTimer);
       DRAW_CTX.warmupTimer = null;
       DRAW_CTX.warmupAuto = false;
@@ -11075,7 +11250,7 @@ function startWarmupAuto(app, dialogues) {
       return;
     }
     advanceWarmupStep(app, true);
-  }, 4200);
+  }, DRAW_CTX.INTERVAL_MS || 7000);
 }
 
 // Переход от разогрева к жеребьевке в лототроне
@@ -11106,7 +11281,13 @@ function startDrawFromWarmup(app) {
     }
   }).catch(() => {});
 
-  renderDrawPage(app);
+  if (DRAW_CTX.step < DRAW_CTX.maxSteps) {
+    DRAW_CTX.auto = true;
+    renderDrawPage(app);
+    startAutoDraw(app);
+  } else {
+    renderDrawPage(app);
+  }
 }
 
 // Остановка прямого эфира администратором
@@ -11337,6 +11518,12 @@ function renderDrawLotteryStage(app) {
       <button class="draw-btn-secondary" id="btn_return_warmup" title="Вернуться к разогреву">
         🎙️ К пре-шоу
       </button>
+
+      ${DRAW_CTX.step >= DRAW_CTX.maxSteps ? `
+        <button class="draw-btn-apply" id="btn_go_postdraw" style="background:linear-gradient(135deg,#3b82f6,#1d4ed8);color:#fff">
+          🎙️ Обсудить итоги в студии (15 реплик ИИ) →
+        </button>
+      ` : ''}
 
       ${(S.me?.role === 'admin' || DRAW_CTX.data?.isAdmin) ? `
         <button class="draw-btn-apply" id="btn_apply_draw" ${DRAW_CTX.step < 4 ? 'disabled title="Проведите хотя бы несколько раундов"' : ''}>
@@ -11601,6 +11788,13 @@ function attachDrawEvents(app) {
     renderDrawWarmupStudio(app);
   };
 
+  const btnGoPostdraw = $('#btn_go_postdraw');
+  if (btnGoPostdraw) {
+    btnGoPostdraw.onclick = () => {
+      startPostdrawFromLottery(app);
+    };
+  }
+
   $('#btn_toggle_auto').onclick = () => {
     DRAW_CTX.auto = !DRAW_CTX.auto;
     if (DRAW_CTX.auto) {
@@ -11828,13 +12022,18 @@ function startAutoDraw(app) {
   const delay = DRAW_CTX.speed === 1 ? 3800 : DRAW_CTX.speed === 2 ? 2200 : 800;
 
   DRAW_CTX.timer = setInterval(async () => {
+    if (!location.hash.startsWith('#/draw') || DRAW_CTX.stage !== 'draw') {
+      clearInterval(DRAW_CTX.timer);
+      DRAW_CTX.timer = null;
+      return;
+    }
     if (DRAW_CTX.step >= DRAW_CTX.maxSteps) {
       clearInterval(DRAW_CTX.timer);
       DRAW_CTX.timer = null;
       DRAW_CTX.auto = false;
       playFanfareSound();
-      toast('🎉 Жеребьёвка успешно завершена!');
-      renderDrawPage(app);
+      toast('🎉 Жеребьёвка завершена! Переходим в студию для обсуждения итогов!');
+      setTimeout(() => startPostdrawFromLottery(app), 1800);
       return;
     }
     await stepDraw(app);
@@ -11982,7 +12181,7 @@ async function stepDraw(app) {
     triggerConfetti($('#stage_center'));
   }
 
-  // Если все шары вытянуты - шлём финишное резюме в Telegram
+  // Если все шары вытянуты - шлём финишное резюме в Telegram и сразу запускаем ИИ-обсуждение итогов (15 фраз)
   if (DRAW_CTX.step === DRAW_CTX.maxSteps) {
     let summaryText = '';
     if (isRpl) {
@@ -12012,6 +12211,16 @@ async function stepDraw(app) {
         drawChrome();
       }
     }).catch(() => {});
+
+    // Генерируем 15 реплик обсуждения итогов одним ИИ-запросом по выпавшим группам/парам
+    loadDrawAiScript('postdraw', DRAW_CTX.tourn, true);
+    if (!DRAW_CTX.auto) {
+      setTimeout(() => {
+        if (location.hash.startsWith('#/draw') && DRAW_CTX.stage === 'draw' && DRAW_CTX.step >= DRAW_CTX.maxSteps) {
+          startPostdrawFromLottery(app);
+        }
+      }, 2500);
+    }
   }
 
   // Добавляем фанатские реплики в чат
@@ -12027,6 +12236,331 @@ async function stepDraw(app) {
   });
 
   renderDrawPage(app);
+}
+
+// ════════════════════════════════════════════════════════════════════
+// ЭТАП 3: ОБСУЖДЕНИЕ ИТОГОВ ЖЕРЕБЬЁВКИ В СТУДИИ (15 РЕПЛИК ИИ, 7 СЕК)
+// ════════════════════════════════════════════════════════════════════
+function startPostdrawFromLottery(app) {
+  if (DRAW_CTX.timer) { clearInterval(DRAW_CTX.timer); DRAW_CTX.timer = null; }
+  DRAW_CTX.auto = false;
+  DRAW_CTX.stage = 'postdraw';
+  DRAW_CTX.postdrawStep = 0;
+  DRAW_CTX.postdrawAuto = true;
+  loadDrawAiScript('postdraw', DRAW_CTX.tourn, false);
+  renderDrawPage(app);
+}
+
+function renderDrawPostStudio(app) {
+  const isRpl = DRAW_CTX.tourn === 'cup_rpl';
+  const isRegions = DRAW_CTX.tourn === 'cup_regions';
+  const isMedia = DRAW_CTX.tourn === 'media_cup';
+
+  const dialogues = getPostdrawDialogues(DRAW_CTX.tourn);
+  const curIdx = Math.min(DRAW_CTX.postdrawStep, dialogues.length - 1);
+  const curItem = dialogues[curIdx] || dialogues[0];
+
+  const tournTitle = isRpl
+    ? '🏆 FONBET КУБОК РОССИИ · ПУТЬ РПЛ'
+    : isRegions
+    ? '⚡ FONBET КУБОК РОССИИ · ПУТЬ РЕГИОНОВ'
+    : '👑 WINLINE КУБОК МЕДИАЛИГИ (MFL)';
+
+  const hostsList = [
+    { name: 'Роман Нагучев', role: 'Ведущий прямого эфира МАТЧ ТВ', avatar: '🎙️' },
+    { name: isMedia ? 'Герман El Classico' : 'Андрей Тихонов', role: isMedia ? 'Президент ФК Амкал' : 'Легенда Спартака и сборной', avatar: isMedia ? '👑' : '⭐' },
+    { name: isMedia ? 'Андрей Тихонов' : 'Герман El Classico', role: isMedia ? 'Легенда футбола' : 'Президент ФК Амкал', avatar: isMedia ? '⭐' : '👑' }
+  ];
+
+  app.innerHTML = `
+  <div class="draw-warmup-wrap" id="draw_wrap">
+    <div class="draw-warmup-topbar">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <div class="draw-live-badge"><span class="draw-live-dot"></span>LIVE ИТОГИ</div>
+        <div>
+          <div class="draw-event-title">${tournTitle} · ОБСУЖДЕНИЕ ИТОГОВ В СТУДИИ</div>
+          <div class="draw-viewers-count" id="draw_viewers">
+            <span class="draw-live-dot" style="background:#22c55e;box-shadow:0 0 8px #22c55e"></span>
+            👁️ <b class="draw-viewers-num">${DRAW_CTX.viewers || 1}</b> <span class="draw-viewers-word">${formatDrawViewersWord(DRAW_CTX.viewers || 1)}</span> онлайн ·
+            <span style="color:#38bdf8;font-weight:700;font-size:11px;margin-left:6px">🔥 Пик: <span class="draw-viewers-peak-val">${DRAW_CTX.peakViewers || DRAW_CTX.viewers || 1}</span></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="draw-top-controls">
+        <button class="draw-sound-toggle ${DRAW_CTX.sound ? 'active' : ''}" id="btn_toggle_sound">
+          ${DRAW_CTX.sound ? '🔔 Звук ВКЛ' : '🔕 Звук ВЫКЛ'}
+        </button>
+        <button class="draw-sound-toggle ${DRAW_CTX.voice ? 'active' : ''}" id="btn_toggle_voice">
+          ${DRAW_CTX.voice ? '🗣️ Голос ВКЛ' : '🔇 Голос ВЫКЛ'}
+        </button>
+        ${(S.me?.role === 'admin' || DRAW_CTX.data?.isAdmin) ? `
+          <button class="draw-speed-btn" id="btn_admin_stop_draw" style="background:#ef4444;border-color:#f87171;color:#fff;font-weight:700">
+            ⏹ Завершить трансляцию
+          </button>
+        ` : ''}
+      </div>
+    </div>
+
+    <div class="draw-warmup-grid">
+      <div class="draw-warmup-main">
+        <div class="draw-warmup-hosts-row">
+          ${hostsList.map(h => {
+            const isSpeaking = curItem.speaker.includes(h.name.split(' ')[0]);
+            return `
+            <div class="draw-warmup-host-card ${isSpeaking ? 'speaking' : ''}">
+              ${isSpeaking ? '<span class="draw-warmup-host-badge">🔴 В ЭФИРЕ</span>' : ''}
+              <div class="draw-host-avatar" style="font-size:20px;width:42px;height:42px">${h.avatar}</div>
+              <div class="draw-host-info">
+                <div class="draw-host-name" style="font-size:13px">${e(h.name)}</div>
+                <div class="draw-host-role">${e(h.role)}</div>
+              </div>
+            </div>`;
+          }).join('')}
+        </div>
+
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:10px;padding:8px 12px;border-radius:10px;background:rgba(56,189,248,0.08);border:1px solid rgba(56,189,248,0.25)">
+          <div style="font-size:12px;color:#cbd5e1">
+            ${DRAW_CTX.postdrawLoading?.[DRAW_CTX.tourn]
+              ? '<span style="color:#facc15;font-weight:700">⏳ Gemini AI разбирает итоговые группы и готовит 15 реплик обсуждения…</span>'
+              : `<span style="color:#38bdf8;font-weight:700">🤖 ${DRAW_CTX.postdrawAiMeta?.[DRAW_CTX.tourn]?.aiGenerated === false ? 'Студийный разбор итогов' : 'Gemini AI разбор итогов'}: ${dialogues.length} реплик · пауза 7 сек</span>`
+            }
+          </div>
+          <button class="draw-btn-secondary" id="btn_regen_postdraw" style="padding:4px 10px;font-size:11px" ${DRAW_CTX.postdrawLoading?.[DRAW_CTX.tourn] ? 'disabled' : ''}>
+            ✨ Сгенерировать итоги заново (ИИ)
+          </button>
+        </div>
+
+        <div class="draw-warmup-speech-hero">
+          <div class="draw-warmup-topic-tag">
+            <span>📊 РАЗБОР ИТОГОВ: ${e(curItem.topic)}</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+            <span style="font-size:22px">${curItem.avatar}</span>
+            <div>
+              <span style="font-weight:800;color:#f0c419;font-size:15px">${e(curItem.speaker)}</span>
+              <span style="color:#94a3b8;font-size:12px;margin-left:6px">(${e(curItem.role)})</span>
+            </div>
+          </div>
+          <div class="draw-warmup-speech-text" id="postdraw_speech_text">
+            «${e(curItem.text)}»
+          </div>
+        </div>
+
+        <div>
+          <div style="font-family:Unbounded,sans-serif;font-size:11px;font-weight:800;color:#94a3b8;margin-bottom:8px;text-transform:uppercase;display:flex;align-items:center;justify-content:space-between">
+            <span>Обсуждение итогов (Реплика ${curIdx + 1} из ${dialogues.length} · 7 сек)</span>
+            <span style="color:${DRAW_CTX.postdrawAuto ? '#4ade80' : '#94a3b8'}">${DRAW_CTX.postdrawAuto ? '● АВТО-ЭФИР (7с)' : '⏸ ПАУЗА'}</span>
+          </div>
+          <div class="draw-warmup-feed" id="postdraw_feed">
+            ${dialogues.slice(0, curIdx + 1).map((dItem, idx) => `
+              <div class="draw-warmup-feed-item ${idx === curIdx ? 'active' : ''}">
+                <span style="font-size:16px">${dItem.avatar}</span>
+                <div style="flex:1">
+                  <div style="font-weight:700;color:#f0c419;margin-bottom:2px">
+                    ${e(dItem.speaker)} <span style="font-weight:400;color:#94a3b8;font-size:11px">· ${e(dItem.topic)}</span>
+                  </div>
+                  <div style="color:#e2e8f0;line-height:1.4">«${e(dItem.text)}»</div>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      </div>
+
+      <div class="draw-chat-panel">
+        <div>
+          <div class="draw-chat-header">
+            <span>💬 ЧАТ ТРАНСЛЯЦИИ</span>
+            <span style="font-size:10px;color:#4ade80">● В СЕТИ (<span class="draw-viewers-num">${DRAW_CTX.viewers || 1}</span>)</span>
+          </div>
+          <div class="draw-chat-messages" id="draw_chat_msgs">
+            ${DRAW_CTX.chat.slice(-10).map(m => `
+              <div class="draw-chat-msg ${m.isAi ? 'draw-ai-chat-msg' : ''}">
+                <span class="draw-chat-author" style="${m.isAi ? 'color:#f0c419;font-weight:800' : ''}">${e(m.author)}:</span>
+                <span>${e(m.text)}</span>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+
+        <div style="position:relative">
+          <div style="font-size:11px;color:#94a3b8;font-weight:600;margin-bottom:4px">Быстрая реакция в студию:</div>
+          <div class="draw-chat-emojis">
+            <button class="draw-chat-emoji-btn" data-emo="🔥">🔥</button>
+            <button class="draw-chat-emoji-btn" data-emo="⚽">⚽</button>
+            <button class="draw-chat-emoji-btn" data-emo="👏">👏</button>
+            <button class="draw-chat-emoji-btn" data-emo="🏆">🏆</button>
+            <button class="draw-chat-emoji-btn" data-emo="😱">😱</button>
+          </div>
+        </div>
+
+        <div class="draw-ai-ask-card">
+          <div style="font-family:Unbounded,sans-serif;font-size:10.5px;font-weight:800;color:#f0c419;margin-bottom:6px;display:flex;align-items:center;justify-content:space-between">
+            <span>🎙️ ВОПРОС ПО ИТОГАМ (ИИ)</span>
+            <span style="font-size:9.5px;color:#4ade80;background:rgba(74,222,128,0.15);padding:1px 6px;border-radius:8px">Gemini AI</span>
+          </div>
+          <div style="display:flex;gap:4px;margin-bottom:6px;flex-wrap:wrap">
+            <button class="draw-ai-speaker-btn active" data-spk="Роман Нагучев" style="font-size:10px;padding:2px 7px;border-radius:4px;border:1px solid #1b5c3f;background:#1b5c3f;color:#fff;cursor:pointer">🎙️ Нагучев</button>
+            <button class="draw-ai-speaker-btn" data-spk="Андрей Тихонов" style="font-size:10px;padding:2px 7px;border-radius:4px;border:1px solid rgba(255,255,255,0.15);background:transparent;color:#cbd5e1;cursor:pointer">⭐ Тихонов</button>
+            <button class="draw-ai-speaker-btn" data-spk="Герман El Classico" style="font-size:10px;padding:2px 7px;border-radius:4px;border:1px solid rgba(255,255,255,0.15);background:transparent;color:#cbd5e1;cursor:pointer">👑 Герман</button>
+          </div>
+          <div style="display:flex;gap:6px">
+            <input type="text" id="draw_ai_question_input" class="input" style="flex:1;padding:6px 8px;font-size:12px;background:rgba(0,0,0,0.4);border-color:rgba(255,255,255,0.15);color:#fff" placeholder="Спросить про итоги групп..." />
+            <button id="btn_send_draw_ai_question" class="btn primary sm" style="padding:6px 10px;font-size:11px;font-weight:700">Отправить</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="draw-controls-bar">
+      <button class="draw-btn-step" id="btn_next_postdraw" ${curIdx >= dialogues.length - 1 ? 'disabled' : ''}>
+        🎙️ Следующая реплика (${curIdx + 1}/${dialogues.length})
+      </button>
+
+      <button class="draw-btn-auto" id="btn_toggle_postdraw_auto">
+        ${DRAW_CTX.postdrawAuto ? '⏸ Приостановить (7 сек)' : '▶ Авто-обсуждение (7 сек)'}
+      </button>
+
+      <button class="draw-btn-secondary" id="btn_reset_postdraw">
+        🔄 Сначала
+      </button>
+
+      <button class="draw-btn-secondary" id="btn_back_to_bowl">
+        🎱 К лототрону и шарам
+      </button>
+
+      ${(S.me?.role === 'admin' || DRAW_CTX.data?.isAdmin) ? `
+        <button class="draw-btn-apply" id="btn_apply_draw_post" ${DRAW_CTX.step < 4 ? 'disabled' : ''}>
+          💾 Утвердить и применить к турниру
+        </button>
+      ` : ''}
+    </div>
+  </div>
+
+  <!-- Итоговые группы или пары прямо под студией -->
+  ${isRpl ? renderRplGroupsView() : isRegions ? renderRegionsPairsView() : renderMediaCupView()}
+  `;
+
+  attachPostdrawEvents(app, dialogues);
+  if (DRAW_CTX.postdrawAuto && !DRAW_CTX.postdrawTimer && !DRAW_CTX.postdrawLoading?.[DRAW_CTX.tourn]) {
+    startPostdrawAuto(app, dialogues);
+  }
+}
+
+function attachPostdrawEvents(app, dialogues) {
+  $('#btn_toggle_sound').onclick = () => { DRAW_CTX.sound = !DRAW_CTX.sound; renderDrawPage(app); };
+  $('#btn_toggle_voice').onclick = () => { DRAW_CTX.voice = !DRAW_CTX.voice; renderDrawPage(app); };
+
+  const btnStop = $('#btn_admin_stop_draw');
+  if (btnStop) {
+    btnStop.onclick = async () => {
+      if (!confirm('Завершить прямую трансляцию жеребьёвки?')) return;
+      await stopBroadcastByAdmin(app);
+    };
+  }
+
+  const btnNext = $('#btn_next_postdraw');
+  if (btnNext) btnNext.onclick = () => advancePostdrawStep(app, false);
+
+  const btnAuto = $('#btn_toggle_postdraw_auto');
+  if (btnAuto) {
+    btnAuto.onclick = () => {
+      DRAW_CTX.postdrawAuto = !DRAW_CTX.postdrawAuto;
+      if (DRAW_CTX.postdrawAuto) startPostdrawAuto(app, dialogues);
+      else if (DRAW_CTX.postdrawTimer) { clearInterval(DRAW_CTX.postdrawTimer); DRAW_CTX.postdrawTimer = null; }
+      renderDrawPostStudio(app);
+    };
+  }
+
+  const btnReset = $('#btn_reset_postdraw');
+  if (btnReset) {
+    btnReset.onclick = () => {
+      DRAW_CTX.postdrawStep = 0;
+      if (DRAW_CTX.postdrawTimer) { clearInterval(DRAW_CTX.postdrawTimer); DRAW_CTX.postdrawTimer = null; }
+      DRAW_CTX.postdrawAuto = false;
+      renderDrawPostStudio(app);
+    };
+  }
+
+  const btnRegen = $('#btn_regen_postdraw');
+  if (btnRegen) {
+    btnRegen.onclick = () => {
+      if (DRAW_CTX.postdrawTimer) { clearInterval(DRAW_CTX.postdrawTimer); DRAW_CTX.postdrawTimer = null; }
+      DRAW_CTX.postdrawStep = 0;
+      DRAW_CTX.postdrawAuto = true;
+      loadDrawAiScript('postdraw', DRAW_CTX.tourn, true);
+    };
+  }
+
+  const btnBack = $('#btn_back_to_bowl');
+  if (btnBack) {
+    btnBack.onclick = () => {
+      if (DRAW_CTX.postdrawTimer) { clearInterval(DRAW_CTX.postdrawTimer); DRAW_CTX.postdrawTimer = null; }
+      DRAW_CTX.postdrawAuto = false;
+      DRAW_CTX.stage = 'draw';
+      renderDrawLotteryStage(app);
+    };
+  }
+
+  const btnApplyPost = $('#btn_apply_draw_post');
+  if (btnApplyPost) {
+    btnApplyPost.onclick = async () => { await applyDrawResults(app); };
+  }
+
+  app.querySelectorAll('[data-emo]').forEach(btn => {
+    btn.onclick = () => {
+      const emo = btn.dataset.emo;
+      spawnFloatingEmoji(emo, $('#draw_wrap'));
+      DRAW_CTX.chat.push({ author: S.me?.teamName || 'Вы (Зритель)', text: emo.repeat(3) + ' Мощные итоги!' });
+      renderChatMessages();
+    };
+  });
+
+  attachAiChatEvents(app);
+
+  const pf = $('#postdraw_feed');
+  if (pf) pf.scrollTop = pf.scrollHeight;
+}
+
+function advancePostdrawStep(app, isAuto) {
+  const dialogues = getPostdrawDialogues(DRAW_CTX.tourn);
+  if (DRAW_CTX.postdrawStep >= dialogues.length - 1) {
+    if (isAuto) {
+      if (DRAW_CTX.postdrawTimer) { clearInterval(DRAW_CTX.postdrawTimer); DRAW_CTX.postdrawTimer = null; }
+      DRAW_CTX.postdrawAuto = false;
+      playFanfareSound();
+      toast('🎙️ Обсуждение итогов жеребьёвки завершено!');
+      renderDrawPostStudio(app);
+    }
+    return;
+  }
+  DRAW_CTX.postdrawStep++;
+  const curItem = dialogues[DRAW_CTX.postdrawStep];
+  if (curItem) speakCommentator(curItem.text);
+  renderDrawPostStudio(app);
+}
+
+function startPostdrawAuto(app) {
+  if (DRAW_CTX.postdrawTimer) clearInterval(DRAW_CTX.postdrawTimer);
+  DRAW_CTX.postdrawTimer = setInterval(() => {
+    const liveList = getPostdrawDialogues(DRAW_CTX.tourn);
+    if (!location.hash.startsWith('#/draw') || DRAW_CTX.stage !== 'postdraw') {
+      clearInterval(DRAW_CTX.postdrawTimer);
+      DRAW_CTX.postdrawTimer = null;
+      return;
+    }
+    if (DRAW_CTX.postdrawStep >= liveList.length - 1) {
+      clearInterval(DRAW_CTX.postdrawTimer);
+      DRAW_CTX.postdrawTimer = null;
+      DRAW_CTX.postdrawAuto = false;
+      playFanfareSound();
+      toast('🎙️ Студийное обсуждение итогов жеребьёвки завершено!');
+      renderDrawPostStudio(app);
+      return;
+    }
+    advancePostdrawStep(app, true);
+  }, DRAW_CTX.INTERVAL_MS || 7000);
 }
 
 // Сохранение результатов жеребьевки в базу данных
