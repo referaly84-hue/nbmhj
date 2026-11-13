@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert';
 import fs from 'node:fs';
-import { getTeamCoach, Coach } from '../src/coaches.ts';
+import { getTeamCoach, computeCoachSynergy, Coach } from '../src/coaches.ts';
 import { computeMatchRatings, getMatchMotm, buildTeamOfRound } from '../src/awards.ts';
 import { initCup2026, recalculateCupGroups, drawNextRegionsRound } from '../src/cup2026.ts';
 
@@ -25,6 +25,46 @@ test('Coaches: retrieves authentic RPL head coaches with designated tactical phi
   const cskaCoach = getTeamCoach('ЦСКА', 'rpl');
   assert.strictEqual(cskaCoach.name, 'Марко Николич');
   assert.strictEqual(cskaCoach.style, 'counter');
+});
+
+test('Coaches: tactical synergy accurately penalizes mismatched playstyles (bus coach with attacking squad)', () => {
+  const busCoach: Coach = {
+    id: 'test_bus',
+    name: 'Иван Оборонный',
+    clubName: 'Тест',
+    nationality: 'Россия',
+    age: 55,
+    style: 'bus',
+    styleTitle: 'Автобус',
+    styleDesc: 'Низкий блок',
+    favoriteFormation: '5-3-2',
+    reputation: 80,
+    temperament: 'Строгий',
+    quote: 'Защита'
+  };
+
+  // 1. Полная гармония: автобусник + установка на автобус и схема 5-3-2
+  const goodTactics = {
+    formation: '5-3-2',
+    speech: 'Ставим бетон, глухая оборона на ноль',
+    training: 'Отработка обороны и стандартов'
+  };
+  const synGood = computeCoachSynergy(busCoach, goodTactics);
+  assert.ok(synGood.score >= 80, `Expected high synergy, got ${synGood.score}`);
+  assert.ok(synGood.status === 'excellent' || synGood.status === 'good');
+  assert.ok(synGood.xgaMultiplier <= 0.95);
+
+  // 2. Тактический диссонанс: автобусник + установка "все в атаку, штурм" и схема 4-3-3
+  const clashTactics = {
+    formation: '4-3-3',
+    speech: 'Все в атаку! Бежим вперед, тотальный штурм и забивать!',
+    training: 'Отработка дальних ударов и атак'
+  };
+  const synClash = computeCoachSynergy(busCoach, clashTactics);
+  assert.ok(synClash.score < 50, `Expected low synergy score, got ${synClash.score}`);
+  assert.ok(synClash.status === 'poor' || synClash.status === 'clash');
+  assert.ok(synClash.xgMultiplier < 1.0);
+  assert.ok(synClash.xgaMultiplier > 1.1);
 });
 
 test('Awards: computes MOTM and post-match interview for match winners and key performers', () => {
