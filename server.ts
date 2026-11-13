@@ -5798,7 +5798,43 @@ function fatText(tid, f) {
   }
   return s;
 }
-function teamStatsSummary(tid, comp) {
+function teamLeagueProfile(tm: any) {
+  const compId = String(tm?.comp || "").trim();
+  const cObj = compId ? compOf(compId) : null;
+  let tier = Number(cObj?.tier || 0);
+  if (!tier) {
+    if (compId === "rpl") tier = 1;
+    else if (compId === "fnl") tier = 2;
+    else if (compId.startsWith("2la")) tier = 3;
+    else if (compId.startsWith("2lb")) tier = 4;
+    else if (compId === "media") tier = 5;
+    else if (compId === "media_div2") tier = 6;
+    else if (compId) tier = 3;
+    else tier = 2;
+  }
+  const subTier = compId === "2la_silver" ? 3.3 : tier;
+  const name = cObj?.name || (compId === "foreign" || tm?.country ? `\u0417\u0430\u0440\u0443\u0431\u0435\u0436\u043D\u044B\u0439 \u043A\u043B\u0443\u0431 (${tm?.country || "\u0438\u043D\u043E\u0441\u0442\u0440\u0430\u043D\u043D\u0430\u044F \u043B\u0438\u0433\u0430"})` : compId || "\u043D\u0435 \u0443\u043A\u0430\u0437\u0430\u043D");
+  const level = cObj?.level || (tier === 1 ? "1-\u0439 \u0443\u0440\u043E\u0432\u0435\u043D\u044C (\u0432\u044B\u0441\u0448\u0438\u0439 \u0434\u0438\u0432\u0438\u0437\u0438\u043E\u043D)" : tier === 2 ? "2-\u0439 \u0443\u0440\u043E\u0432\u0435\u043D\u044C" : tier === 3 ? "3-\u0439 \u0443\u0440\u043E\u0432\u0435\u043D\u044C" : tier === 4 ? "4-\u0439 \u0443\u0440\u043E\u0432\u0435\u043D\u044C" : "\u043C\u0435\u0434\u0438\u0439\u043D\u044B\u0439/\u043B\u044E\u0431\u0438\u0442\u0435\u043B\u044C\u0441\u043A\u0438\u0439 \u0443\u0440\u043E\u0432\u0435\u043D\u044C");
+  return { compId, name, tier, subTier, level };
+}
+function matchClassGapText(homeInfo: any, awayInfo: any, hName: string, aName: string) {
+  const diff = Math.abs((homeInfo?.subTier || 1) - (awayInfo?.subTier || 1));
+  const tierDiff = Math.abs((homeInfo?.tier || 1) - (awayInfo?.tier || 1));
+  if (diff < 0.05) {
+    return `\u041A\u041E\u041C\u0410\u041D\u0414\u042B \u041E\u0414\u041D\u041E\u0413\u041E \u0414\u0418\u0412\u0418\u0417\u0418\u041E\u041D\u0410: \u043E\u0431\u0430 \u043A\u043B\u0443\u0431\u0430 \u0432\u044B\u0441\u0442\u0443\u043F\u0430\u044E\u0442 \u043D\u0430 \u043E\u0434\u043D\u043E\u043C \u0443\u0440\u043E\u0432\u043D\u0435 \u043B\u0438\u0433 (${homeInfo?.name}${homeInfo?.name !== awayInfo?.name ? ` / ${awayInfo?.name}` : ""}).`;
+  }
+  const homeIsFav = (homeInfo?.subTier || 1) < (awayInfo?.subTier || 1);
+  const fav = homeIsFav ? { ...homeInfo, teamName: hName, leagueName: homeInfo.name } : { ...awayInfo, teamName: aName, leagueName: awayInfo.name };
+  const dog = homeIsFav ? { ...awayInfo, teamName: aName, leagueName: awayInfo.name } : { ...homeInfo, teamName: hName, leagueName: homeInfo.name };
+  if (tierDiff >= 3) {
+    return `\u041A\u041E\u041B\u041E\u0421\u0421\u0410\u041B\u042C\u041D\u0410\u042F \u0420\u0410\u0417\u041D\u0418\u0426\u0410 \u0412 \u041A\u041B\u0410\u0421\u0421\u0415 (\u0440\u0430\u0437\u0440\u044B\u0432 ${tierDiff} \u0434\u0438\u0432\u0438\u0437\u0438\u043E\u043D\u0430: ${fav.teamName} [${fav.leagueName}, ${fav.tier}-\u0439 \u0443\u0440\u043E\u0432\u0435\u043D\u044C] \u043F\u0440\u043E\u0442\u0438\u0432 ${dog.teamName} [${dog.leagueName}, ${dog.tier}-\u0439 \u0443\u0440\u043E\u0432\u0435\u043D\u044C]): \u043F\u043E\u0434\u0430\u0432\u043B\u044F\u044E\u0449\u0435\u0435 \u043F\u0440\u0435\u0432\u043E\u0441\u0445\u043E\u0434\u0441\u0442\u0432\u043E ${fav.teamName} \u0432 \u0441\u043A\u043E\u0440\u043E\u0441\u0442\u0438 \u043F\u0440\u0438\u043D\u044F\u0442\u0438\u044F \u0440\u0435\u0448\u0435\u043D\u0438\u0439, \u0442\u0435\u0445\u043D\u0438\u043A\u0435, \u043A\u0443\u043B\u044C\u0442\u0443\u0440\u0435 \u043F\u0430\u0441\u0430, \u0443\u0441\u0442\u043E\u0439\u0447\u0438\u0432\u043E\u0441\u0442\u0438 \u043A \u043F\u0440\u0435\u0441\u0441\u0438\u043D\u0433\u0443 \u0438 \u0444\u0438\u0437\u0438\u043A\u0435. ${dog.teamName} \u0432\u044B\u043D\u0443\u0436\u0434\u0435\u043D \u0441\u0430\u0434\u0438\u0442\u044C\u0441\u044F \u0432 \u0433\u043B\u0443\u0431\u043E\u043A\u0438\u0439 \u043D\u0438\u0437\u043A\u0438\u0439 \u0431\u043B\u043E\u043A \u0438 \u0438\u0433\u0440\u0430\u0442\u044C \u0432\u0442\u043E\u0440\u044B\u043C \u043D\u043E\u043C\u0435\u0440\u043E\u043C (\u0448\u0430\u043D\u0441\u044B \u2014 \u0432 \u043F\u0440\u0435\u0434\u0435\u043B\u044C\u043D\u043E\u0439 \u0441\u0430\u043C\u043E\u043E\u0442\u0434\u0430\u0447\u0435, \u043A\u043E\u043D\u0442\u0440\u0430\u0442\u0430\u043A\u0430\u0445 \u0438 \u0441\u0442\u0430\u043D\u0434\u0430\u0440\u0442\u0430\u0445; \u043A 60\u201375-\u0439 \u043C\u0438\u043D\u0443\u0442\u0435 \u0430\u043D\u0434\u0435\u0440\u0434\u043E\u0433\u0443 \u0442\u044F\u0436\u0435\u043B\u043E \u0434\u0435\u0440\u0436\u0430\u0442\u044C \u0442\u0435\u043C\u043F \u0444\u0430\u0432\u043E\u0440\u0438\u0442\u0430).`;
+  }
+  if (tierDiff >= 2) {
+    return `\u0411\u041E\u041B\u042C\u0428\u0410\u042F \u0420\u0410\u0417\u041D\u0418\u0426\u0410 \u0412 \u041A\u041B\u0410\u0421\u0421\u0415 (\u0440\u0430\u0437\u0440\u044B\u0432 ${tierDiff} \u0434\u0438\u0432\u0438\u0437\u0438\u043E\u043D\u0430: ${fav.teamName} [${fav.leagueName}, ${fav.tier}-\u0439 \u0443\u0440\u043E\u0432\u0435\u043D\u044C] \u043F\u0440\u043E\u0442\u0438\u0432 ${dog.teamName} [${dog.leagueName}, ${dog.tier}-\u0439 \u0443\u0440\u043E\u0432\u0435\u043D\u044C]): \u0437\u0430\u043C\u0435\u0442\u043D\u043E\u0435 \u043F\u0440\u0435\u0432\u043E\u0441\u0445\u043E\u0434\u0441\u0442\u0432\u043E ${fav.teamName} \u0432 \u043A\u043B\u0430\u0441\u0441\u0435 \u0441\u043E\u0441\u0442\u0430\u0432\u0430, \u043A\u043E\u043D\u0442\u0440\u043E\u043B\u0435 \u043C\u044F\u0447\u0430 \u0438 \u0438\u043D\u0442\u0435\u043D\u0441\u0438\u0432\u043D\u043E\u0441\u0442\u0438. ${dog.teamName} \u0434\u0435\u0439\u0441\u0442\u0432\u0443\u0435\u0442 \u043A\u043E\u043C\u043F\u0430\u043A\u0442\u043D\u043E \u043E\u0442 \u043E\u0431\u043E\u0440\u043E\u043D\u044B \u0438 \u0438\u0449\u0435\u0442 \u0448\u0430\u043D\u0441\u044B \u0432 \u0431\u044B\u0441\u0442\u0440\u044B\u0445 \u043A\u043E\u043D\u0442\u0440\u0430\u0442\u0430\u043A\u0430\u0445 \u0438 \u043D\u0430 \u0441\u0442\u0430\u043D\u0434\u0430\u0440\u0442\u0430\u0445.`;
+  }
+  return `\u0420\u0410\u0417\u041D\u0418\u0426\u0410 \u0412 \u0423\u0420\u041E\u0412\u041D\u0415 \u041B\u0418\u0413: ${fav.teamName} (${fav.leagueName}) \u0432\u044B\u0448\u0435 \u0434\u0438\u0432\u0438\u0437\u0438\u043E\u043D\u043E\u043C, \u0447\u0435\u043C ${dog.teamName} (${dog.leagueName}). \u0423 \u0444\u0430\u0432\u043E\u0440\u0438\u0442\u0430 \u0432\u044B\u0448\u0435 \u0441\u0440\u0435\u0434\u043D\u0438\u0439 \u0443\u0440\u043E\u0432\u0435\u043D\u044C \u0438\u0441\u043F\u043E\u043B\u043D\u0438\u0442\u0435\u043B\u0435\u0439 \u0438 \u0442\u0435\u043C\u043F \u0438\u0433\u0440\u044B, \u043D\u043E \u0432 \u043E\u0434\u043D\u043E\u043C \u043C\u0430\u0442\u0447\u0435 \u043A\u043E\u043C\u0430\u043D\u0434\u0430 \u043D\u0438\u0436\u0435 \u043A\u043B\u0430\u0441\u0441\u043E\u043C \u0441\u043F\u043E\u0441\u043E\u0431\u043D\u0430 \u043D\u0430\u0432\u044F\u0437\u0430\u0442\u044C \u043F\u043B\u043E\u0442\u043D\u0443\u044E \u0431\u043E\u0440\u044C\u0431\u0443 \u0437\u0430 \u0441\u0447\u0451\u0442 \u043E\u0440\u0433\u0430\u043D\u0438\u0437\u043E\u0432\u0430\u043D\u043D\u043E\u0441\u0442\u0438 \u0438 \u043D\u0430\u0441\u0442\u0440\u043E\u044F.`;
+}
+function teamStatsSummary(tid, comp, leagueCompId?: string) {
   const allP = Object.values(agg().P).filter((x) => x.t === tid && x.comp === comp);
   const topG = allP.filter((x) => x.g > 0).sort((a, b) => b.g - a.g).slice(0, 3).map((x) => `${x.n} (${x.g} \u0433\u043E\u043B.)`);
   const topA = allP.filter((x) => x.a > 0).sort((a, b) => b.a - a.a).slice(0, 3).map((x) => `${x.n} (${x.a} \u043F\u0430\u0441.)`);
@@ -5809,6 +5845,13 @@ function teamStatsSummary(tid, comp) {
   if (topA.length) res += `\u0410\u0441\u0441\u0438\u0441\u0442\u0435\u043D\u0442\u044B: ${topA.join(", ")}. `;
   if (cards.length) res += `\u0414\u0438\u0441\u0446\u0438\u043F\u043B\u0438\u043D\u0430 (\u0440\u0438\u0441\u043A \u043D\u0430\u0440\u0443\u0448\u0435\u043D\u0438\u0439): ${cards.join(", ")}. `;
   if (tStats) res += `\u041A\u043E\u043C\u0430\u043D\u0434\u043D\u044B\u0435 \u043F\u043E\u043A\u0430\u0437\u0430\u0442\u0435\u043B\u0438 (${tStats.m} \u0438\u0433\u0440): \u0437\u0430\u0431\u0438\u0442\u043E ${tStats.g || 0}, xG ${+(tStats.xg || 0).toFixed(1)}, \u0444\u043E\u043B\u044B ${tStats.fo || 0}, \u0416\u041A ${tStats.yc || 0}${tStats.rc ? `, \u041A\u041A ${tStats.rc}` : ""}.`;
+  if (leagueCompId && leagueCompId !== comp) {
+    const lgSummary = teamStatsSummary(tid, leagueCompId);
+    const lgName = compOf(leagueCompId)?.name || leagueCompId;
+    if (lgSummary && !lgSummary.startsWith("\u0421\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043A\u0430 \u0441\u0435\u0437\u043E\u043D\u0430")) {
+      res = (res.trim() ? res.trim() + " | " : "") + `\u0412 \u0447\u0435\u043C\u043F\u0438\u043E\u043D\u0430\u0442\u0435 (${lgName}): ${lgSummary}`;
+    }
+  }
   return res.trim() || "\u0421\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043A\u0430 \u0441\u0435\u0437\u043E\u043D\u0430 \u043D\u0430\u043A\u0430\u043F\u043B\u0438\u0432\u0430\u0435\u0442\u0441\u044F (\u043F\u0435\u0440\u0432\u044B\u0435 \u0442\u0443\u0440\u044B \u0447\u0435\u043C\u043F\u0438\u043E\u043D\u0430\u0442\u0430).";
 }
 function staffSummary(tid) {
@@ -5914,10 +5957,12 @@ function cardLine(p, date, opts?: { slotInfo?: any; fatigueInfo?: any; roleNames
 async function buildCtx(f) {
   const ctx: any = { fid: f.id, comp: compName(f), roundLabel: roundLabel(f), date: f.date, time: f.time, names: {}, pidSide: {}, pidTeam: {}, pos: {}, slotPos: {}, slotFit: {}, fatigue: { home: {}, away: {} }, roles: { home: {}, away: {} }, lineup: {}, sides: {}, loan: {} };
   const H = team(f.home), A = team(f.away);
+  const lpH = teamLeagueProfile(H), lpA = teamLeagueProfile(A);
   ctx.sides = {
-    home: { id: H.id, name: H.name, logo: teamLogo(H.id) },
-    away: { id: A.id, name: A.name, logo: teamLogo(A.id) }
+    home: { id: H.id, name: H.name, logo: teamLogo(H.id), compId: lpH.compId, leagueName: lpH.name, leagueLevel: lpH.level, tier: lpH.tier, subTier: lpH.subTier },
+    away: { id: A.id, name: A.name, logo: teamLogo(A.id), compId: lpA.compId, leagueName: lpA.name, leagueLevel: lpA.level, tier: lpA.tier, subTier: lpA.subTier }
   };
+  ctx.classGap = matchClassGapText(lpH, lpA, H.name, A.name);
   const isFinal = isFinalMatch(f);
   const isNeutral = !!(f.neutralField || isFinal);
   if (isFinal && f.comp === "cup") {
@@ -6013,8 +6058,8 @@ async function buildCtx(f) {
     away: computeTeamChemistry(f.away, ctx.lineup.away, f.date)
   };
   ctx.teamStats = {
-    home: teamStatsSummary(f.home, f.comp),
-    away: teamStatsSummary(f.away, f.comp)
+    home: teamStatsSummary(f.home, f.comp, lpH.compId),
+    away: teamStatsSummary(f.away, f.comp, lpA.compId)
   };
   ctx.staff = {
     home: staffSummary(f.home),
@@ -6022,13 +6067,27 @@ async function buildCtx(f) {
   };
   ctx.staffBans = { home: bannedStaffText(f.home), away: bannedStaffText(f.away) };
   const comp = f.comp;
-  const rows = table(comp, f.date);
-  const rH = rows.find((x) => x.id === f.home);
-  const rA = rows.find((x) => x.id === f.away);
-  ctx.tableStandings = {
-    home: rH ? `${rH.pos}-\u0435 \u043C\u0435\u0441\u0442\u043E (${rH.pts} \u043E\u0447\u043A., ${rH.p} \u0438\u0433\u0440, ${rH.w}\u0412 ${rH.d}\u041D ${rH.l}\u041F, \u043C\u044F\u0447\u0438 ${rH.gf}-${rH.ga}, \u0440\u0430\u0437\u043D\u0438\u0446\u0430 ${rH.gd >= 0 ? "+" + rH.gd : rH.gd}, \u0444\u043E\u0440\u043C\u0430: ${rH.form || "\u2014"}, \u0437\u043E\u043D\u0430: ${rH.zoneLabel || "\u0441\u0435\u0440\u0435\u0434\u0438\u043D\u0430 \u0442\u0430\u0431\u043B\u0438\u0446\u044B"})` : "\u043D\u0430\u0447\u0430\u043B\u043E \u0442\u0443\u0440\u043D\u0438\u0440\u0430",
-    away: rA ? `${rA.pos}-\u0435 \u043C\u0435\u0441\u0442\u043E (${rA.pts} \u043E\u0447\u043A., ${rA.p} \u0438\u0433\u0440, ${rA.w}\u0412 ${rA.d}\u041D ${rA.l}\u041F, \u043C\u044F\u0447\u0438 ${rA.gf}-${rA.ga}, \u0440\u0430\u0437\u043D\u0438\u0446\u0430 ${rA.gd >= 0 ? "+" + rA.gd : rA.gd}, \u0444\u043E\u0440\u043C\u0430: ${rA.form || "\u2014"}, \u0437\u043E\u043D\u0430: ${rA.zoneLabel || "\u0441\u0435\u0440\u0435\u0434\u0438\u043D\u0430 \u0442\u0430\u0431\u043B\u0438\u0446\u044B"})` : "\u043D\u0430\u0447\u0430\u043B\u043E \u0442\u0443\u0440\u043D\u0438\u0440\u0430"
-  };
+  const isLeagueMatch = compOf(comp)?.type === "league";
+  const formatStandingRow = (r: any, leagueLabel?: string) =>
+    `${r.pos}-\u0435 \u043C\u0435\u0441\u0442\u043E${leagueLabel ? ` (${leagueLabel})` : ""} (${r.pts} \u043E\u0447\u043A., ${r.p} \u0438\u0433\u0440, ${r.w}\u0412 ${r.d}\u041D ${r.l}\u041F, \u043C\u044F\u0447\u0438 ${r.gf}-${r.ga}, \u0440\u0430\u0437\u043D\u0438\u0446\u0430 ${r.gd >= 0 ? "+" + r.gd : r.gd}, \u0444\u043E\u0440\u043C\u0430: ${r.form || "\u2014"}, \u0437\u043E\u043D\u0430: ${r.zoneLabel || "\u0441\u0435\u0440\u0435\u0434\u0438\u043D\u0430 \u0442\u0430\u0431\u043B\u0438\u0446\u044B"})`;
+  if (isLeagueMatch) {
+    const rows = table(comp, f.date);
+    const rH = rows.find((x) => x.id === f.home);
+    const rA = rows.find((x) => x.id === f.away);
+    ctx.tableStandings = {
+      home: rH ? formatStandingRow(rH) : `${lpH.name} \u2014 \u043D\u0430\u0447\u0430\u043B\u043E \u0442\u0443\u0440\u043D\u0438\u0440\u0430`,
+      away: rA ? formatStandingRow(rA) : `${lpA.name} \u2014 \u043D\u0430\u0447\u0430\u043B\u043E \u0442\u0443\u0440\u043D\u0438\u0440\u0430`
+    };
+  } else {
+    const rowsH = lpH.compId ? table(lpH.compId, f.date) : [];
+    const rowsA = lpA.compId ? table(lpA.compId, f.date) : [];
+    const rH = rowsH.find((x) => x.id === f.home);
+    const rA = rowsA.find((x) => x.id === f.away);
+    ctx.tableStandings = {
+      home: rH ? formatStandingRow(rH, lpH.name) : `${lpH.name} (${lpH.level}) \u2014 \u043D\u0430\u0447\u0430\u043B\u043E \u0441\u0435\u0437\u043E\u043D\u0430`,
+      away: rA ? formatStandingRow(rA, lpA.name) : `${lpA.name} (${lpA.level}) \u2014 \u043D\u0430\u0447\u0430\u043B\u043E \u0441\u0435\u0437\u043E\u043D\u0430`
+    };
+  }
   if (!f.refereeName && (f.comp === "rpl" || f.comp === "cup")) {
     assignReferee(f);
   }
@@ -6105,7 +6164,7 @@ function lineText(ctx, s) {
     fatigueInfo: fatMap[pid],
     roleNames: playerRolesFor(roles, pid)
   });
-  return `\u0421\u041E\u0421\u0422\u0410\u0412 ${sd.name} (\u0441\u0445\u0435\u043C\u0430 ${L.formation}), \u0441\u0442\u0430\u0440\u0442\u043E\u0432\u044B\u0435 11:
+  return `\u0421\u041E\u0421\u0422\u0410\u0412 ${sd.name}${sd.leagueName ? ` [${sd.leagueName}${sd.tier ? `, ${sd.tier}-\u0439 \u0443\u0440\u043E\u0432\u0435\u043D\u044C` : ""}]` : ""} (\u0441\u0445\u0435\u043C\u0430 ${L.formation}), \u0441\u0442\u0430\u0440\u0442\u043E\u0432\u044B\u0435 11:
 ${L.starters.map((p) => "- " + rowStarter(p)).join("\n")}
 \u0421\u043A\u0430\u043C\u0435\u0439\u043A\u0430 \u0437\u0430\u043F\u0430\u0441\u043D\u044B\u0445:
 ${L.bench.map((p) => "- " + rowBench(p)).join("\n")}
@@ -6139,7 +6198,7 @@ function buildUser(ctx, a, b, st, issues, mode = "full") {
     }
     return s;
   };
-  let u = `\u2550\u2550\u2550 \u041C\u0410\u0422\u0427: ${H} \u2014 ${A} | ${ctx.comp}, ${ctx.roundLabel} | ${ctx.date} ${ctx.time} | \u0421\u0442\u0430\u0434\u0438\u043E\u043D: ${ctx.stadium}${ctx.neutralField ? " [\u041D\u0415\u0419\u0422\u0420\u0410\u041B\u042C\u041D\u041E\u0415 \u041F\u041E\u041B\u0415 \u2014 \u0424\u0418\u041D\u0410\u041B]" : ""} \u2550\u2550\u2550
+  let u = `\u2550\u2550\u2550 \u041C\u0410\u0422\u0427: ${H}${ctx.sides.home?.leagueName ? ` [${ctx.sides.home.leagueName}]` : ""} \u2014 ${A}${ctx.sides.away?.leagueName ? ` [${ctx.sides.away.leagueName}]` : ""} | ${ctx.comp}, ${ctx.roundLabel} | ${ctx.date} ${ctx.time} | \u0421\u0442\u0430\u0434\u0438\u043E\u043D: ${ctx.stadium}${ctx.neutralField ? " [\u041D\u0415\u0419\u0422\u0420\u0410\u041B\u042C\u041D\u041E\u0415 \u041F\u041E\u041B\u0415 \u2014 \u0424\u0418\u041D\u0410\u041B]" : ""} \u2550\u2550\u2550
 `;
   if (ctx.neutralField) {
     u += `\u0424\u0410\u041A\u0422\u041E\u0420 \u041D\u0415\u0419\u0422\u0420\u0410\u041B\u042C\u041D\u041E\u0413\u041E \u041F\u041E\u041B\u042F: \u041C\u0430\u0442\u0447 \u043F\u0440\u043E\u0432\u043E\u0434\u0438\u0442\u0441\u044F \u043D\u0430 \u043D\u0435\u0439\u0442\u0440\u0430\u043B\u044C\u043D\u043E\u043C \u0441\u0442\u0430\u0434\u0438\u043E\u043D\u0435! \u041F\u0440\u0435\u0438\u043C\u0443\u0449\u0435\u0441\u0442\u0432\u0430 \u0434\u043E\u043C\u0430\u0448\u043D\u0435\u0433\u043E \u043F\u043E\u043B\u044F \u043D\u0435\u0442 \u043D\u0438 \u0443 \u043E\u0434\u043D\u043E\u0439 \u0438\u0437 \u043A\u043E\u043C\u0430\u043D\u0434. \u041F\u043E\u0434\u0434\u0435\u0440\u0436\u043A\u0430 \u0442\u0440\u0438\u0431\u0443\u043D \u0440\u0430\u0437\u0434\u0435\u043B\u0435\u043D\u0430 \u043F\u043E\u0440\u043E\u0432\u043D\u0443.
@@ -6170,6 +6229,14 @@ function buildUser(ctx, a, b, st, issues, mode = "full") {
   }
   u += `1. \u0422\u0423\u0420\u041D\u0418\u0420\u041D\u0410\u042F \u0422\u0410\u0411\u041B\u0418\u0426\u0410 \u0418 \u0422\u0423\u0420\u041D\u0418\u0420\u041D\u041E\u0415 \u0417\u041D\u0410\u0427\u0415\u041D\u0418\u0415:
 `;
+  u += `- \u0414\u0438\u0432\u0438\u0437\u0438\u043E\u043D \u0438 \u0441\u0442\u0430\u0442\u0443\u0441 ${H}: ${ctx.sides.home?.leagueName || "\u043D\u0435 \u0443\u043A\u0430\u0437\u0430\u043D"}${ctx.sides.home?.leagueLevel ? ` (${ctx.sides.home.leagueLevel})` : ""}
+`;
+  u += `- \u0414\u0438\u0432\u0438\u0437\u0438\u043E\u043D \u0438 \u0441\u0442\u0430\u0442\u0443\u0441 ${A}: ${ctx.sides.away?.leagueName || "\u043D\u0435 \u0443\u043A\u0430\u0437\u0430\u043D"}${ctx.sides.away?.leagueLevel ? ` (${ctx.sides.away.leagueLevel})` : ""}
+`;
+  if (ctx.classGap) {
+    u += `- \u0411\u0410\u041B\u0410\u041D\u0421 \u041A\u041B\u0410\u0421\u0421\u0410 \u0421\u041E\u041F\u0415\u0420\u041D\u0418\u041A\u041E\u0412: ${ctx.classGap}
+`;
+  }
   u += `- \u041F\u043E\u043B\u043E\u0436\u0435\u043D\u0438\u0435 ${H}: ${ctx.tableStandings.home}
 `;
   u += `- \u041F\u043E\u043B\u043E\u0436\u0435\u043D\u0438\u0435 ${A}: ${ctx.tableStandings.away}
@@ -6689,9 +6756,16 @@ function fakePeriod(a, b, ctx, prev) {
     const lateFatiguePenalty = m > 65 ? ((fitnessS < 0.98 ? (1 - fitnessS) * 0.4 : 0) + tiredCountS * 0.03) : 0;
     const posPenalty = forcedCountS * 0.04;
 
-    // Turnover probability modified by coach tactical clash, chemistry, out-of-position and personal fatigue
+    const tierS = ctx.sides?.[s]?.subTier || 1;
+    const tierO = ctx.sides?.[o]?.subTier || 1;
+    const tierGap = tierO - tierS;
+    const classPossFactor = Math.max(0.65, Math.min(1.4, 1 - tierGap * 0.12));
+    const classAttackFactor = Math.max(0.65, Math.min(1.45, 1 + tierGap * 0.12));
+    const classGoalFactor = Math.max(0.7, Math.min(1.35, 1 + tierGap * 0.08));
+
+    // Turnover probability modified by coach tactical clash, chemistry, out-of-position, personal fatigue and league tier gap
     const errFactor = (synS?.errorMultiplier || 1) * (chemS?.errorReduction || 1) + lateFatiguePenalty + posPenalty;
-    const baseSwitchProb = 0.28 * Math.min(1.65, Math.max(0.6, errFactor));
+    const baseSwitchProb = 0.28 * Math.min(1.65, Math.max(0.6, errFactor)) * classPossFactor;
     if (R() < baseSwitchProb) hold = hold === "home" ? "away" : "home";
 
     const p1 = pick(P), p2 = pick(P);
@@ -6703,15 +6777,15 @@ function fakePeriod(a, b, ctx, prev) {
       const pid = rolesS[roleKey];
       return pid && P.includes(pid) ? pid : null;
     };
-    const shotThreshold = 0.13 * (synS?.xgMultiplier || 1) * (chemS?.cohesionMultiplier || 1);
+    const shotThreshold = 0.13 * (synS?.xgMultiplier || 1) * (chemS?.cohesionMultiplier || 1) * classAttackFactor;
     if (r < shotThreshold) {
       const sh = pick(P.filter((p) => GROUP[ctx.pos[p]] !== "gk")) || P[0];
       const gk = Q.find((p) => ctx.pos[p] === "ВР") || Q[0];
-      const x = +(0.04 + R() * 0.25 * (synS?.xgMultiplier || 1)).toFixed(2);
+      const x = +(0.04 + R() * 0.25 * (synS?.xgMultiplier || 1) * Math.max(0.75, Math.min(1.3, 1 + tierGap * 0.07))).toFixed(2);
       push(m, 20, s, "shot", [sh], `${ctx.names[sh]} бьёт по воротам!`, { xg: x });
       const q2 = R();
-      // Goal threshold adjusted for attacker synergy/chemistry vs opponent defense/chemistry
-      const goalThreshold = 0.22 * (synS?.xgMultiplier || 1) / (chemO?.cohesionMultiplier || 1);
+      // Goal threshold adjusted for attacker synergy/chemistry vs opponent defense/chemistry and league tier gap
+      const goalThreshold = 0.22 * (synS?.xgMultiplier || 1) / (chemO?.cohesionMultiplier || 1) * classGoalFactor;
       if (q2 < goalThreshold) {
         push(m, 23, s, "goal", [sh, p2 !== sh ? p2 : p1], `ГОЛ! ${ctx.names[sh]} переигрывает вратаря!`);
       } else if (q2 < 0.6) {

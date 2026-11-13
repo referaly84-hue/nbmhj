@@ -324,3 +324,89 @@ test('H2H last 3 matches, position fit, personal fatigue, set-piece roles, and e
     fs.writeFileSync(dbPath, backupRaw, 'utf8');
   }
 });
+
+test('Cup match exposes club divisions, league tiers, class gap and domestic stats in buildCtx/buildUser/lineText/fakePeriod', async () => {
+  const dbPath = path.join(process.cwd(), 'data', 'db.json');
+  const backupRaw = fs.readFileSync(dbPath, 'utf8');
+
+  const rplTeam = db.teams.find((t: any) => t.comp === 'rpl');
+  const twoLbTeam = db.teams.find((t: any) => String(t.comp || '').startsWith('2lb_'));
+  assert.ok(rplTeam, 'Expected at least one RPL team');
+  assert.ok(twoLbTeam, 'Expected at least one 2nd League B team');
+
+  const cupFxId = 'test_cup_rpl_vs_2lb';
+  const rplLeagueFxId = 'test_rpl_league_fx_for_cup_ctx';
+
+  try {
+    const rplOpponent = db.teams.find((t: any) => t.comp === 'rpl' && t.id !== rplTeam.id);
+    assert.ok(rplOpponent);
+
+    db.fixtures.push(
+      {
+        id: rplLeagueFxId,
+        season: db.settings.season,
+        comp: 'rpl',
+        round: 1,
+        date: '2099-06-01',
+        time: '19:00',
+        home: rplTeam.id,
+        away: rplOpponent.id,
+        status: 'done',
+        hg: 2,
+        ag: 0,
+        st: {
+          teams: { home: { g: 2, xg: 2.1, fo: 9, yc: 1 }, away: { g: 0, xg: 0.4, fo: 12, yc: 2 } },
+          players: {},
+        },
+      },
+      {
+        id: cupFxId,
+        season: db.settings.season,
+        comp: 'cup',
+        round: 1,
+        date: '2099-06-05',
+        time: '18:00',
+        home: twoLbTeam.id,
+        away: rplTeam.id,
+        status: 'scheduled',
+        hg: null,
+        ag: null,
+        pos: 0,
+      }
+    );
+
+    const cupFx = db.fixtures.find((x: any) => x.id === cupFxId);
+    const ctx = await buildCtx(cupFx);
+
+    assert.equal(ctx.sides.home.tier, 4);
+    assert.equal(ctx.sides.away.tier, 1);
+    assert.ok(ctx.sides.home.leagueName.includes('Вторая лига Б'));
+    assert.ok(ctx.sides.away.leagueName.includes('РПЛ'));
+    assert.ok(ctx.classGap.includes('КОЛОССАЛЬНАЯ РАЗНИЦА В КЛАССЕ'));
+    assert.ok(ctx.classGap.includes('разрыв 3 дивизиона'));
+    assert.ok(ctx.classGap.includes(`${rplTeam.name} [${ctx.sides.away.leagueName}, 1-й уровень]`));
+    assert.ok(ctx.classGap.includes(`${twoLbTeam.name} [${ctx.sides.home.leagueName}, 4-й уровень]`));
+    assert.ok(ctx.teamStats.away.includes('В чемпионате ('), 'Cup match should surface domestic league stats');
+
+    const userPrompt = buildUser(ctx, 1, 90, null, [], 'full');
+    assert.ok(userPrompt.includes(`${twoLbTeam.name} [${ctx.sides.home.leagueName}]`));
+    assert.ok(userPrompt.includes(`${rplTeam.name} [${ctx.sides.away.leagueName}]`));
+    assert.ok(userPrompt.includes(`Дивизион и статус ${twoLbTeam.name}: ${ctx.sides.home.leagueName}`));
+    assert.ok(userPrompt.includes(`Дивизион и статус ${rplTeam.name}: ${ctx.sides.away.leagueName}`));
+    assert.ok(userPrompt.includes('БАЛАНС КЛАССА СОПЕРНИКОВ: КОЛОССАЛЬНАЯ РАЗНИЦА В КЛАССЕ'));
+
+    const homeLine = lineText(ctx, 'home');
+    const awayLine = lineText(ctx, 'away');
+    assert.ok(homeLine.includes(`[${ctx.sides.home.leagueName}, 4-й уровень]`));
+    assert.ok(awayLine.includes(`[${ctx.sides.away.leagueName}, 1-й уровень]`));
+
+    const simEvents = fakePeriod(1, 90, ctx, []);
+    assert.ok(Array.isArray(simEvents) && simEvents.length > 0);
+  } finally {
+    const removeIds = new Set([cupFxId, rplLeagueFxId]);
+    db.fixtures = db.fixtures.filter((x: any) => !removeIds.has(x.id));
+    await new Promise((r) => setTimeout(r, 300));
+    fs.writeFileSync(dbPath, backupRaw, 'utf8');
+  }
+});
+
